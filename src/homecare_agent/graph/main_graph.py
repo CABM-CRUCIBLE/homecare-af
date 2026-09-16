@@ -14,6 +14,7 @@ implementing the complete agentic code generation pipeline:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from functools import partial
 from typing import Any
@@ -303,7 +304,7 @@ Output the revised Strategy document.
         )
         arch_iteration = state.get("arch_iteration", 0) + 1
         return {
-            "architecture_approved": True,  # Force proceed
+            "architecture_approved": False,  # Fail-safe: do not approve unrevised architecture on failure
             "arch_iteration": arch_iteration,
             "errors": [{"step": "revise_architecture", "trace_id": trace_id, "message": f"Architecture revision failed: {e}"}],
             "current_step": "revise_architecture",
@@ -312,7 +313,7 @@ Output the revised Strategy document.
 
 
 async def _run_tests(state: AgentState, settings: Settings, test_type: str = "unit") -> dict[str, Any]:
-    """Run tests (unit, e2e, load) and capture results."""
+    """Run tests (unit, e2e, load) asynchronously without blocking the event loop."""
     import subprocess
     from pathlib import Path
 
@@ -325,34 +326,99 @@ async def _run_tests(state: AgentState, settings: Settings, test_type: str = "un
     results: dict[str, Any] = {"type": test_type, "passed": 0, "failed": 0, "total": 0}
     errors: list[dict[str, Any]] = []
 
+    # Dynamic directory discovery
+    backend_dir = repo_path / "code" / "backend"
+    if not backend_dir.exists():
+        sln_files = list(repo_path.glob("**/*.sln"))
+        csproj_files = list(repo_path.glob("**/*.csproj"))
+        if sln_files:
+            backend_dir = sln_files[0].parent
+        elif csproj_files:
+            backend_dir = csproj_files[0].parent
+        else:
+            backend_dir = repo_path
+
+    frontend_dir = repo_path / "code" / "frontend"
+    if not frontend_dir.exists():
+        package_files = [p for p in repo_path.glob("**/package.json") if "node_modules" not in str(p)]
+        if package_files:
+            frontend_dir = package_files[0].parent
+        else:
+            frontend_dir = repo_path
+
     if test_type == "unit":
-        # Backend tests
+        # Backend unit tests (.NET) - non-blocking thread execution
         try:
-            proc = subprocess.run(
-                ["dotnet", "test", "--no-build", "--verbosity", "minimal"],
-                cwd=str(repo_path / "code" / "backend"),
-                capture_output=True, text=True, timeout=300,
-            )
-            results["backend_output"] = proc.stdout
-            results["backend_returncode"] = proc.returncode
+            if any(backend_dir.glob("*.sln")) or any(backend_dir.glob("*.csproj")) or (backend_dir / "code" / "backend").exists():
+                proc = await asyncio.to_thread(
+                    subprocess.run,
+                    ["dotnet", "test", "--no-build", "--verbosity", "minimal"],
+                    cwd=str(backend_dir),
+                    capture_output=True,
+                    text=True,
+                    timeout=300,
+                )
+                results["backend_output"] = proc.stdout
+                results["backend_returncode"] = proc.returncode
         except Exception as e:
             logger.error("[ERROR:%s][trace_id=%s] Backend tests failed to run: %s", step_name, trace_id, e, exc_info=True)
             results["backend_error"] = str(e)
             errors.append({"step": step_name, "trace_id": trace_id, "component": "backend", "message": str(e)})
 
-        # Frontend tests
+        # Frontend unit tests (Node.js/Vitest) - non-blocking thread execution
         try:
-            proc = subprocess.run(
-                ["npm", "test", "--", "--run"],
-                cwd=str(repo_path / "code" / "frontend"),
-                capture_output=True, text=True, timeout=300,
-            )
-            results["frontend_output"] = proc.stdout
-            results["frontend_returncode"] = proc.returncode
+            if (frontend_dir / "package.json").exists():
+                proc = await asyncio.to_thread(
+                    subprocess.run,
+                    ["npm", "test", "--", "--run"],
+                    cwd=str(frontend_dir),
+                    capture_output=True,
+                    text=True,
+                    timeout=300,
+                )
+                results["frontend_output"] = proc.stdout
+                results["frontend_returncode"] = proc.returncode
         except Exception as e:
             logger.error("[ERROR:%s][trace_id=%s] Frontend tests failed to run: %s", step_name, trace_id, e, exc_info=True)
             results["frontend_error"] = str(e)
             errors.append({"step": step_name, "trace_id": trace_id, "component": "frontend", "message": str(e)})
+
+    elif test_type == "e2e":
+        # End-to-end tests (Playwright)
+        try:
+            if (frontend_dir / "package.json").exists():
+                proc = await asyncio.to_thread(
+                    subprocess.run,
+                    ["npx", "playwright", "test"],
+                    cwd=str(frontend_dir),
+                    capture_output=True,
+                    text=True,
+                    timeout=600,
+                )
+                results["e2e_output"] = proc.stdout
+                results["e2e_returncode"] = proc.returncode
+        except Exception as e:
+            logger.error("[ERROR:%s][trace_id=%s] E2E tests failed: %s", step_name, trace_id, e, exc_info=True)
+            results["e2e_error"] = str(e)
+
+    elif test_type == "load":
+        # Load tests (k6)
+        load_test_file = repo_path / "tests" / "load" / "test.js"
+        if load_test_file.exists():
+            try:
+                proc = await asyncio.to_thread(
+                    subprocess.run,
+                    ["k6", "run", str(load_test_file)],
+                    cwd=str(repo_path),
+                    capture_output=True,
+                    text=True,
+                    timeout=300,
+                )
+                results["load_output"] = proc.stdout
+                results["load_returncode"] = proc.returncode
+            except Exception as e:
+                logger.error("[ERROR:%s][trace_id=%s] Load tests failed: %s", step_name, trace_id, e, exc_info=True)
+                results["load_error"] = str(e)
 
     result_key = f"{test_type}_test_results"
     logger.info(

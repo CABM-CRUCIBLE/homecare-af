@@ -310,6 +310,7 @@ pytest tests/test_checkpoint_resume.py -v
 - [Workflow Guide](docs/WORKFLOW.md): Detailed 14-step SDLC automation lifecycle.
 - [LLM Model Trade-Off Analysis](docs/LLM_MODEL_TRADEOFF_ANALYSIS.md): Trade-off evaluation comparing frontier vs cost-effective models.
 - [Pipeline Resumption Architecture](walkthrough_implementation_plan/pipeline_resumption_implementation_plan.md): Deep-dive into state checkpointing and resuming from Step 4.
+- [Senior Architect Code Review](docs/CODE_REVIEW_SENIOR_ARCHITECT.md): Deep architectural analysis, concurrency evaluation, and critical code review.
 
 ---
 

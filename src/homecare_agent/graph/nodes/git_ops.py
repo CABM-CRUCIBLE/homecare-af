@@ -93,25 +93,44 @@ async def create_branch(state: AgentState, settings: Settings) -> dict[str, Any]
     try:
         repo = Repo(repo_path)
 
+        # Safely resolve remote (don't assume remote is named 'origin')
+        target_remote = None
+        if repo.remotes:
+            target_remote = repo.remotes.origin if "origin" in [r.name for r in repo.remotes] else repo.remotes[0]
+
+        # Collect existing head names safely whether heads is IterableList or dict
+        existing_heads = [ref if isinstance(ref, str) else getattr(ref, "name", str(ref)) for ref in repo.heads]
+
         # Ensure we're on the latest default branch
         default_branch = settings.repo_default_branch
-        if default_branch in [ref.name for ref in repo.heads]:
+        if default_branch in existing_heads:
             repo.heads[default_branch].checkout()  # type: ignore[index]
-            if repo.remotes:
-                repo.remotes.origin.pull()
+            if target_remote:
+                try:
+                    target_remote.pull()
+                except Exception as pull_err:
+                    logger.warning("[create_branch][trace_id=%s] Pull from remote skipped or failed: %s", trace_id, pull_err)
 
-        # Create and checkout new branch
-        if branch_name.split("/")[-1] in [ref.name for ref in repo.heads]:
-            logger.info("[create_branch][trace_id=%s] Branch already exists; checking out.", trace_id)
-            repo.heads[branch_name.split("/")[-1]].checkout()  # type: ignore[index]
+        # Create and checkout new branch (supports full hierarchical name and short name)
+        short_name = branch_name.split("/")[-1]
+
+        if branch_name in existing_heads:
+            logger.info("[create_branch][trace_id=%s] Branch '%s' already exists; checking out.", trace_id, branch_name)
+            repo.heads[branch_name].checkout()  # type: ignore[index]
+        elif short_name in existing_heads:
+            logger.info("[create_branch][trace_id=%s] Branch '%s' already exists; checking out.", trace_id, short_name)
+            repo.heads[short_name].checkout()  # type: ignore[index]
         else:
             new_branch = repo.create_head(branch_name)
             new_branch.checkout()
 
-        # Push to origin
-        if repo.remotes:
-            repo.remotes.origin.push(branch_name, set_upstream=True)
-            logger.info("[create_branch][trace_id=%s] Branch pushed to origin: %s", trace_id, branch_name)
+        # Push to remote
+        if target_remote:
+            try:
+                target_remote.push(branch_name, set_upstream=True)
+                logger.info("[create_branch][trace_id=%s] Branch pushed to remote: %s", trace_id, branch_name)
+            except Exception as push_err:
+                logger.warning("[create_branch][trace_id=%s] Remote push skipped or failed: %s", trace_id, push_err)
 
         logger.info(
             "[COMPLETED:create_branch][trace_id=%s] Branch '%s' successfully checked out and configured",
@@ -214,9 +233,12 @@ async def commit_and_push(
         if safe_to_stage:
             repo.git.add(safe_to_stage)
             try:
-                repo.index.commit(message)
                 if repo.remotes and branch_name:
-                    repo.remotes.origin.push(branch_name)
+                    remote = repo.remotes.origin if "origin" in [r.name for r in repo.remotes] else repo.remotes[0]
+                    try:
+                        remote.push(branch_name)
+                    except Exception as push_err:
+                        logger.warning("[commit_and_push][trace_id=%s] Remote push skipped or failed: %s", trace_id, push_err)
                 logger.info("[COMPLETED:commit_and_push][trace_id=%s] Committed and pushed %d file(s): %s", trace_id, len(safe_to_stage), message)
             except Exception as commit_err:
                 logger.warning("[commit_and_push][trace_id=%s] Commit skipped or clean: %s", trace_id, commit_err)

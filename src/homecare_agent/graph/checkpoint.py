@@ -219,11 +219,13 @@ class CheckpointManager:
         }
 
         try:
-            with open(file_path, "w", encoding="utf-8") as f:
+            temp_path = file_path.with_suffix(f".tmp_{datetime.datetime.now().timestamp()}")
+            with open(temp_path, "w", encoding="utf-8") as f:
                 json.dump(checkpoint_data, f, cls=_StateEncoder, indent=2)
+            temp_path.replace(file_path)
             logger.debug("[CHECKPOINT:SAVED] Checkpoint saved at %s for trace_id=%s (step=%s)", file_path, trace_id, last_step)
         except Exception as e:
-            logger.error("[CHECKPOINT:ERROR] Failed to save checkpoint at %s: %e", file_path, e)
+            logger.error("[CHECKPOINT:ERROR] Failed to save checkpoint at %s: %s", file_path, e)
 
         return file_path
 

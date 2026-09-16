@@ -231,11 +231,8 @@ Generate ALL files specified in the scope. Every file must be COMPLETE.
 def _parse_generated_files(response: str) -> dict[str, str]:
     """Parse generated file contents from LLM response.
 
-    Expects format:
-        ### FILE: path/to/file.cs
-        ```csharp
-        <content>
-        ```
+    Splits by '### FILE:' headers and extracts code within outer fences,
+    preserving any internal nested backticks, templates, or markdown blocks.
 
     Args:
         response: LLM response text.
@@ -246,15 +243,36 @@ def _parse_generated_files(response: str) -> dict[str, str]:
     files: dict[str, str] = {}
     import re
 
-    # Pattern: ### FILE: <path> followed by ```<lang>\n<content>\n```
-    pattern = r"###\s*FILE:\s*(.+?)\s*\n```\w*\n(.*?)```"
-    matches = re.findall(pattern, response, re.DOTALL)
+    # Split response by '### FILE: <path>' header
+    parts = re.split(r"(?m)^###\s*FILE:\s*", response)
+    for part in parts:
+        part = part.strip()
+        if not part:
+            continue
 
-    for file_path, content in matches:
-        file_path = file_path.strip()
-        content = content.strip()
-        if file_path and content:
-            files[file_path] = content
+        lines = part.split("\n", 1)
+        file_path = lines[0].strip().strip("`'\" \r")
+
+        if len(lines) < 2 or not file_path:
+            continue
+
+        body = lines[1].strip()
+
+        # Look for opening fence ```<lang>
+        fence_match = re.search(r"^```[a-zA-Z0-9_\-]*\r?\n", body)
+        if fence_match:
+            code_start = fence_match.end()
+            # Find the last closing ``` fence within this file section
+            last_fence_idx = body.rfind("```")
+            if last_fence_idx > code_start:
+                code_content = body[code_start:last_fence_idx].rstrip()
+            else:
+                code_content = body[code_start:].rstrip()
+        else:
+            code_content = body
+
+        if file_path and code_content:
+            files[file_path] = code_content
 
     return files
 
