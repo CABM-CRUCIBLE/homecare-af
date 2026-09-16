@@ -11,12 +11,59 @@ from __future__ import annotations
 
 import logging
 import re
+from pathlib import Path
 from typing import Any
 
 from homecare_agent.config import AuthMode, Settings
 from homecare_agent.graph.state import AgentState
 
 logger = logging.getLogger(__name__)
+
+
+class GitSecurityViolationError(Exception):
+    """Raised when sensitive files or secrets are detected during git operations."""
+
+    pass
+
+
+SECRET_PATTERNS = [
+    (re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"), "Cryptographic Private Key"),
+    (re.compile(r"sk-or-v1-[a-f0-9]{64}"), "OpenRouter API Key"),
+    (re.compile(r"sk-ant-[a-zA-Z0-9_\-]{20,}"), "Anthropic API Key"),
+    (re.compile(r"ghp_[a-zA-Z0-9]{36}"), "GitHub Personal Access Token"),
+    (re.compile(r"github_pat_[a-zA-Z0-9_]{82}"), "GitHub Fine-Grained Token"),
+    (re.compile(r"AKIA[0-9A-Z]{16}"), "AWS Access Key"),
+]
+
+FORBIDDEN_STAGING_PATTERNS = [
+    ".env",
+    ".pem",
+    ".key",
+    "id_rsa",
+    "id_ed25519",
+    "credentials.json",
+]
+
+
+def scan_file_for_secrets(file_path: Path) -> list[str]:
+    """Scan a file for known API keys, private keys, or credentials."""
+    findings = []
+    try:
+        if file_path.stat().st_size > 1_000_000:
+            return findings
+        content = file_path.read_text(encoding="utf-8", errors="ignore")
+        for pattern, label in SECRET_PATTERNS:
+            if pattern.search(content):
+                findings.append(label)
+    except Exception:
+        pass
+    return findings
+
+
+def is_forbidden_staging_file(file_name: str) -> bool:
+    """Check if file matches forbidden staging list."""
+    lower = file_name.lower().replace("\\", "/")
+    return any(pat in lower for pat in FORBIDDEN_STAGING_PATTERNS)
 
 
 async def create_branch(state: AgentState, settings: Settings) -> dict[str, Any]:
@@ -29,12 +76,19 @@ async def create_branch(state: AgentState, settings: Settings) -> dict[str, Any]
     """
     from git import Repo
 
+    trace_id = state.get("trace_id", "no-trace")
     feature_name = state.get("feature_name", "feature")
     # Convert to kebab-case
     branch_name = "feature/" + re.sub(r"[^a-z0-9]+", "-", feature_name.lower()).strip("-")
 
     repo_path = state.get("repo_path", settings.repo_path)
-    logger.info("Creating branch: %s at %s", branch_name, repo_path)
+    logger.info(
+        "[START:create_branch][trace_id=%s] Creating branch '%s' for '%s' at %s",
+        trace_id,
+        branch_name,
+        feature_name,
+        repo_path,
+    )
 
     try:
         repo = Repo(repo_path)
@@ -48,7 +102,7 @@ async def create_branch(state: AgentState, settings: Settings) -> dict[str, Any]
 
         # Create and checkout new branch
         if branch_name.split("/")[-1] in [ref.name for ref in repo.heads]:
-            logger.info("Branch already exists; checking out.")
+            logger.info("[create_branch][trace_id=%s] Branch already exists; checking out.", trace_id)
             repo.heads[branch_name.split("/")[-1]].checkout()  # type: ignore[index]
         else:
             new_branch = repo.create_head(branch_name)
@@ -57,7 +111,13 @@ async def create_branch(state: AgentState, settings: Settings) -> dict[str, Any]
         # Push to origin
         if repo.remotes:
             repo.remotes.origin.push(branch_name, set_upstream=True)
-            logger.info("Branch pushed to origin: %s", branch_name)
+            logger.info("[create_branch][trace_id=%s] Branch pushed to origin: %s", trace_id, branch_name)
+
+        logger.info(
+            "[COMPLETED:create_branch][trace_id=%s] Branch '%s' successfully checked out and configured",
+            trace_id,
+            branch_name,
+        )
 
         return {
             "branch_name": branch_name,
@@ -65,11 +125,18 @@ async def create_branch(state: AgentState, settings: Settings) -> dict[str, Any]
             "completed_steps": ["create_branch"],
         }
 
-    except Exception:
-        logger.exception("Branch creation failed.")
+    except Exception as e:
+        logger.error(
+            "[ERROR:create_branch][trace_id=%s] Branch creation failed for '%s' (branch: %s): %s",
+            trace_id,
+            feature_name,
+            branch_name,
+            e,
+            exc_info=True,
+        )
         return {
             "branch_name": branch_name,
-            "errors": [{"step": "create_branch", "message": "Branch creation failed"}],
+            "errors": [{"step": "create_branch", "trace_id": trace_id, "message": f"Branch creation failed: {e}"}],
             "current_step": "create_branch",
             "completed_steps": ["create_branch"],
         }
@@ -94,23 +161,67 @@ async def commit_and_push(
     """
     from git import Repo
 
+    trace_id = state.get("trace_id", "no-trace")
+    feature_name = state.get("feature_name", "feature")
     repo_path = state.get("repo_path", settings.repo_path)
     branch_name = state.get("branch_name", "")
 
     if not message:
-        message = f"feat({state.get('feature_name', 'feature')}): {step_name}"
+        message = f"feat({feature_name}): {step_name}"
+
+    logger.info(
+        "[START:commit_and_push][trace_id=%s] Staging, committing, and pushing step '%s' on branch '%s'",
+        trace_id,
+        step_name,
+        branch_name,
+    )
 
     try:
         repo = Repo(repo_path)
-        repo.git.add(A=True)
 
-        if repo.is_dirty() or repo.untracked_files:
-            repo.index.commit(message)
-            if repo.remotes and branch_name:
-                repo.remotes.origin.push(branch_name)
-            logger.info("Committed and pushed: %s", message)
+        # Collect changed & untracked files
+        changed = [item.a_path for item in repo.index.diff(None)]
+        untracked = list(repo.untracked_files)
+        candidates = sorted(set(changed + untracked))
+
+        safe_to_stage: list[str] = []
+        for file_rel in candidates:
+            if is_forbidden_staging_file(file_rel):
+                logger.critical(
+                    "[CRITICAL:commit_and_push][trace_id=%s] Staging aborted: forbidden sensitive file detected: %s",
+                    trace_id,
+                    file_rel,
+                )
+                raise GitSecurityViolationError(
+                    f"Forbidden file pattern '{file_rel}' blocked from git staging."
+                )
+
+            full_p = Path(repo_path) / file_rel
+            if full_p.exists() and full_p.is_file():
+                secrets = scan_file_for_secrets(full_p)
+                if secrets:
+                    logger.critical(
+                        "[CRITICAL:commit_and_push][trace_id=%s] Staging aborted: secret (%s) detected in file %s",
+                        trace_id,
+                        ", ".join(secrets),
+                        file_rel,
+                    )
+                    raise GitSecurityViolationError(
+                        f"Secret detected in '{file_rel}' ({', '.join(secrets)}). Staging halted."
+                    )
+                safe_to_stage.append(file_rel)
+
+        if safe_to_stage:
+            repo.git.add(safe_to_stage)
+            try:
+                repo.index.commit(message)
+                if repo.remotes and branch_name:
+                    repo.remotes.origin.push(branch_name)
+                logger.info("[COMPLETED:commit_and_push][trace_id=%s] Committed and pushed %d file(s): %s", trace_id, len(safe_to_stage), message)
+            except Exception as commit_err:
+                logger.warning("[commit_and_push][trace_id=%s] Commit skipped or clean: %s", trace_id, commit_err)
         else:
-            logger.info("No changes to commit.")
+            logger.info("[COMPLETED:commit_and_push][trace_id=%s] No changes to commit for step '%s'.", trace_id, step_name)
 
         return {
             "commit_log": [{"step": step_name, "message": message}],
@@ -118,10 +229,16 @@ async def commit_and_push(
             "completed_steps": [step_name],
         }
 
-    except Exception:
-        logger.exception("Commit/push failed.")
+    except Exception as e:
+        logger.error(
+            "[ERROR:commit_and_push][trace_id=%s] Commit/push failed for step '%s': %s",
+            trace_id,
+            step_name,
+            e,
+            exc_info=True,
+        )
         return {
-            "errors": [{"step": step_name, "message": "Commit/push failed"}],
+            "errors": [{"step": step_name, "trace_id": trace_id, "message": f"Commit/push failed: {e}"}],
             "current_step": step_name,
             "completed_steps": [step_name],
         }
@@ -139,10 +256,16 @@ async def create_pull_request(state: AgentState, settings: Settings, llm: Any = 
     Returns:
         State updates with PR number and URL.
     """
-    logger.info("Creating Pull Request...")
-
+    trace_id = state.get("trace_id", "no-trace")
     branch_name = state.get("branch_name", "")
     feature_name = state.get("feature_name", "")
+
+    logger.info(
+        "[START:create_pull_request][trace_id=%s] Creating Pull Request for '%s' from branch '%s'...",
+        trace_id,
+        feature_name,
+        branch_name,
+    )
 
     # Build PR description
     pr_body = f"""## Feature: {feature_name}
@@ -197,7 +320,12 @@ async def create_pull_request(state: AgentState, settings: Settings, llm: Any = 
             base=settings.repo_default_branch,
         )
 
-        logger.info("PR created: #%d — %s", pr.number, pr.html_url)
+        logger.info(
+            "[COMPLETED:create_pull_request][trace_id=%s] PR created: #%d — %s",
+            trace_id,
+            pr.number,
+            pr.html_url,
+        )
 
         return {
             "pr_number": pr.number,
@@ -206,10 +334,16 @@ async def create_pull_request(state: AgentState, settings: Settings, llm: Any = 
             "completed_steps": ["create_pr"],
         }
 
-    except Exception:
-        logger.exception("PR creation failed.")
+    except Exception as e:
+        logger.error(
+            "[ERROR:create_pull_request][trace_id=%s] PR creation failed for '%s': %s",
+            trace_id,
+            feature_name,
+            e,
+            exc_info=True,
+        )
         return {
-            "errors": [{"step": "create_pr", "message": "PR creation failed"}],
+            "errors": [{"step": "create_pr", "trace_id": trace_id, "message": f"PR creation failed: {e}"}],
             "current_step": "create_pr",
             "completed_steps": ["create_pr"],
         }

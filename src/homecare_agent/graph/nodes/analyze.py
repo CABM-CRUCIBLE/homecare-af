@@ -59,39 +59,46 @@ async def analyze_codebase(state: AgentState, settings: Settings, llm: LLMProvid
     Returns:
         State updates with codebase analysis and detected patterns.
     """
+    trace_id = state.get("trace_id", "no-trace")
+    feature_name = state.get("feature_name", "Unknown")
     repo_path = Path(state.get("repo_path", settings.repo_path))
-    logger.info("Starting codebase analysis at: %s", repo_path)
+    logger.info("[START:analyze_codebase][trace_id=%s] Starting codebase analysis for '%s' at: %s", trace_id, feature_name, repo_path)
 
     updates: dict[str, Any] = {
         "current_step": "analyze_codebase",
     }
 
     if not repo_path.exists():
-        logger.error("Repository path does not exist: %s", repo_path)
-        updates["errors"] = [{"step": "analyze_codebase", "message": f"Repository not found: {repo_path}"}]
+        logger.error("[ERROR:analyze_codebase][trace_id=%s] Target repository path does not exist: %s", trace_id, repo_path)
+        updates["errors"] = [{"step": "analyze_codebase", "trace_id": trace_id, "message": f"Repository not found: {repo_path}"}]
         updates["completed_steps"] = ["analyze_codebase"]
         return updates
 
     # Step 1: Scan directory structure
+    logger.debug("[analyze_codebase][trace_id=%s] Scanning directory structure...", trace_id)
     structure_summary = _scan_directory_structure(repo_path)
 
     # Step 2: Read key architectural files
+    logger.debug("[analyze_codebase][trace_id=%s] Reading key architectural files...", trace_id)
     key_files_content = _read_key_files(repo_path)
 
     # Step 3: Identify entities and patterns
+    logger.debug("[analyze_codebase][trace_id=%s] Scanning Domain entities...", trace_id)
     entity_summary = _scan_entities(repo_path)
 
     # Step 4: Identify API controllers
+    logger.debug("[analyze_codebase][trace_id=%s] Scanning API controllers...", trace_id)
     api_summary = _scan_controllers(repo_path)
 
     # Step 5: Identify frontend routes
+    logger.debug("[analyze_codebase][trace_id=%s] Scanning frontend routes...", trace_id)
     frontend_summary = _scan_frontend_routes(repo_path)
 
     # Step 6: Ask LLM to synthesize the analysis
     analysis_prompt = f"""Analyze the following enterprise codebase structure and files.
 Produce a comprehensive current-state assessment.
 
-**Feature being built:** {state.get("feature_name", "Unknown")}
+**Feature being built:** {feature_name}
 **Feature description:** {state.get("feature_description", "")}
 
 **Repository Structure:**
@@ -126,13 +133,14 @@ Output as structured JSON with keys:
 """
 
     try:
+        logger.debug("[analyze_codebase][trace_id=%s] Requesting architectural synthesis from LLM...", trace_id)
         response = await llm.ainvoke(
             prompt=analysis_prompt,
             system_prompt=ANALYSIS_SYSTEM_PROMPT,
             node_name="analyze_codebase",
             state_overrides=state,
             trace_name="codebase_analysis",
-            trace_metadata={"repo_path": str(repo_path), "feature_name": state.get("feature_name", "")},
+            trace_metadata={"repo_path": str(repo_path), "feature_name": feature_name, "trace_id": trace_id},
         )
 
         import json
@@ -142,12 +150,26 @@ Output as structured JSON with keys:
             parsed = json.loads(response[json_start:json_end])
             updates["codebase_analysis"] = parsed
             updates["existing_patterns"] = parsed.get("architecture_patterns", {})
+            logger.info(
+                "[COMPLETED:analyze_codebase][trace_id=%s] Analysis parsed successfully — reusable=%d, blocking_defects=%d, new_builds=%d",
+                trace_id,
+                len(parsed.get("reusable_capabilities", [])),
+                len(parsed.get("blocking_defects", [])),
+                len(parsed.get("new_builds", [])),
+            )
         else:
+            logger.warning("[WARN:analyze_codebase][trace_id=%s] Failed to extract JSON object from analysis response", trace_id)
             updates["codebase_analysis"] = {"raw_analysis": response}
 
-    except Exception:
-        logger.exception("Codebase analysis LLM call failed.")
-        updates["errors"] = [{"step": "analyze_codebase", "message": "Analysis LLM call failed"}]
+    except Exception as e:
+        logger.error(
+            "[ERROR:analyze_codebase][trace_id=%s] Codebase analysis LLM call failed for '%s': %s",
+            trace_id,
+            feature_name,
+            e,
+            exc_info=True,
+        )
+        updates["errors"] = [{"step": "analyze_codebase", "trace_id": trace_id, "message": f"Analysis LLM call failed: {e}"}]
         updates["codebase_analysis"] = {"raw_structure": structure_summary}
 
     updates["completed_steps"] = ["analyze_codebase"]

@@ -18,6 +18,7 @@ from typing import Any
 from homecare_agent.config import ExecutionMode, Settings
 from homecare_agent.graph.state import AgentState
 from homecare_agent.llm.provider import LLMProvider
+from homecare_agent.tools.file_tools import PathTraversalSecurityError, validate_safe_path
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +51,8 @@ async def execute_wave(state: AgentState, settings: Settings, llm: LLMProvider) 
     Returns:
         State updates with generated code and execution results.
     """
+    trace_id = state.get("trace_id", "no-trace")
+    feature_name = state.get("feature_name", "Unknown")
     current_wave = state.get("current_wave", 0)
     work_packages = state.get("work_packages", [])
     standing_instructions = state.get("standing_instructions", "")
@@ -62,7 +65,7 @@ async def execute_wave(state: AgentState, settings: Settings, llm: LLMProvider) 
 
     wave_ids = sorted(waves.keys())
     if current_wave >= len(wave_ids):
-        logger.info("All waves completed.")
+        logger.info("[COMPLETED:execute_wave][trace_id=%s] All waves completed for '%s'", trace_id, feature_name)
         return {
             "current_step": "all_waves_complete",
             "completed_steps": [f"wave_{current_wave}_complete"],
@@ -72,13 +75,19 @@ async def execute_wave(state: AgentState, settings: Settings, llm: LLMProvider) 
     wave_wps = waves[current_wave_id]
 
     logger.info(
-        "Executing wave %d (%s) with %d work package(s)...",
-        current_wave, current_wave_id, len(wave_wps),
+        "[START:execute_wave][trace_id=%s] Executing wave %d (%s) with %d work package(s) for '%s'...",
+        trace_id,
+        current_wave,
+        current_wave_id,
+        len(wave_wps),
+        feature_name,
     )
 
     updates: dict[str, Any] = {
         "current_step": f"execute_wave_{current_wave_id}",
     }
+
+    errors: list[dict[str, Any]] = []
 
     if settings.execution_mode == ExecutionMode.PARALLEL:
         # Execute all WPs in this wave concurrently
@@ -90,21 +99,51 @@ async def execute_wave(state: AgentState, settings: Settings, llm: LLMProvider) 
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
         generated_code: dict[str, str] = {}
-        for result in results:
+        for idx, result in enumerate(results):
             if isinstance(result, dict):
                 generated_code.update(result.get("files", {}))
             elif isinstance(result, Exception):
-                logger.exception("Work package execution failed: %s", result)
+                failed_wp = wave_wps[idx].get("id", f"wp_{idx}")
+                logger.error(
+                    "[ERROR:execute_wave][trace_id=%s] Work package %s execution failed: %s",
+                    trace_id,
+                    failed_wp,
+                    result,
+                    exc_info=True,
+                )
+                errors.append({"step": f"execute_wave_{current_wave_id}", "trace_id": trace_id, "wp_id": failed_wp, "message": str(result)})
 
         updates["generated_code"] = generated_code
     else:
         # Sequential execution
         generated_code = {}
         for wp in wave_wps:
-            result = await _execute_single_wp(wp, standing_instructions, settings, llm, state)
-            generated_code.update(result.get("files", {}))
+            try:
+                result = await _execute_single_wp(wp, standing_instructions, settings, llm, state)
+                generated_code.update(result.get("files", {}))
+            except Exception as e:
+                wp_id = wp.get("id", "unknown")
+                logger.error(
+                    "[ERROR:execute_wave][trace_id=%s] Work package %s execution failed: %s",
+                    trace_id,
+                    wp_id,
+                    e,
+                    exc_info=True,
+                )
+                errors.append({"step": f"execute_wave_{current_wave_id}", "trace_id": trace_id, "wp_id": wp_id, "message": str(e)})
 
         updates["generated_code"] = generated_code
+
+    if errors:
+        updates["errors"] = errors
+
+    logger.info(
+        "[COMPLETED:execute_wave][trace_id=%s] Finished wave %d (%s) with %d generated file(s)",
+        trace_id,
+        current_wave,
+        current_wave_id,
+        len(generated_code),
+    )
 
     updates["current_wave"] = current_wave + 1
     updates["completed_steps"] = [f"wave_{current_wave_id}"]
@@ -131,13 +170,14 @@ async def _execute_single_wp(
     Returns:
         Dict with 'files' mapping file paths to generated content.
     """
+    trace_id = state.get("trace_id", "no-trace") if state else "no-trace"
     wp_id = wp.get("id", "unknown")
     wp_title = wp.get("title", "")
-    logger.info("Executing work package: %s — %s", wp_id, wp_title)
+    logger.info("[START:_execute_single_wp][trace_id=%s] Executing work package: %s — %s", trace_id, wp_id, wp_title)
 
     prompt = wp.get("prompt", "")
     if not prompt:
-        logger.warning("Work package %s has no prompt; skipping.", wp_id)
+        logger.warning("[WARN:_execute_single_wp][trace_id=%s] Work package %s has no prompt; skipping.", trace_id, wp_id)
         return {"files": {}}
 
     full_prompt = f"""{standing_instructions}
@@ -157,22 +197,34 @@ Generate ALL files specified in the scope. Every file must be COMPLETE.
 """
 
     try:
+        logger.debug("[_execute_single_wp][trace_id=%s] Invoking LLM for work package %s...", trace_id, wp_id)
         response = await llm.ainvoke(
             prompt=full_prompt,
             system_prompt=CODE_GENERATOR_PERSONA,
             node_name="execute_wave",
             state_overrides=state,
             trace_name=f"execute_wp_{wp_id}",
-            trace_metadata={"wp_id": wp_id, "wp_title": wp_title},
+            trace_metadata={"wp_id": wp_id, "wp_title": wp_title, "trace_id": trace_id},
         )
 
         # Parse file contents from response
         files = _parse_generated_files(response)
-        logger.info("Work package %s generated %d file(s).", wp_id, len(files))
+        logger.info(
+            "[COMPLETED:_execute_single_wp][trace_id=%s] Work package %s generated %d file(s).",
+            trace_id,
+            wp_id,
+            len(files),
+        )
         return {"files": files}
 
-    except Exception:
-        logger.exception("Work package %s execution failed.", wp_id)
+    except Exception as e:
+        logger.error(
+            "[ERROR:_execute_single_wp][trace_id=%s] Work package %s execution failed: %s",
+            trace_id,
+            wp_id,
+            e,
+            exc_info=True,
+        )
         return {"files": {}}
 
 
@@ -217,23 +269,63 @@ async def write_generated_files(state: AgentState, settings: Settings) -> dict[s
     Returns:
         State updates.
     """
+    trace_id = state.get("trace_id", "no-trace")
+    feature_name = state.get("feature_name", "Unknown")
     repo_path = Path(state.get("repo_path", settings.repo_path))
     generated_code = state.get("generated_code", {})
 
-    logger.info("Writing %d generated file(s) to: %s", len(generated_code), repo_path)
+    logger.info(
+        "[START:write_generated_files][trace_id=%s] Writing %d generated file(s) for '%s' to %s",
+        trace_id,
+        len(generated_code),
+        feature_name,
+        repo_path,
+    )
 
     written_files: list[str] = []
+    errors: list[dict[str, Any]] = []
     for file_path, content in generated_code.items():
-        full_path = repo_path / file_path
         try:
+            full_path = validate_safe_path(file_path, repo_path)
             full_path.parent.mkdir(parents=True, exist_ok=True)
             full_path.write_text(content, encoding="utf-8")
             written_files.append(file_path)
-            logger.info("  Written: %s", file_path)
-        except Exception:
-            logger.exception("Failed to write: %s", file_path)
+            logger.debug("[write_generated_files][trace_id=%s] Written: %s", trace_id, file_path)
+        except PathTraversalSecurityError as pse:
+            logger.critical(
+                "[CRITICAL:write_generated_files][trace_id=%s] Path traversal security violation blocked for '%s': %s",
+                trace_id,
+                file_path,
+                pse,
+            )
+            errors.append({
+                "step": "write_files",
+                "trace_id": trace_id,
+                "file": file_path,
+                "security_violation": True,
+                "message": f"Security violation: {pse}",
+            })
+        except Exception as e:
+            logger.error(
+                "[ERROR:write_generated_files][trace_id=%s] Failed to write '%s': %s",
+                trace_id,
+                file_path,
+                e,
+                exc_info=True,
+            )
+            errors.append({"step": "write_files", "trace_id": trace_id, "file": file_path, "message": str(e)})
 
-    return {
+    logger.info(
+        "[COMPLETED:write_generated_files][trace_id=%s] Successfully written %d/%d file(s)",
+        trace_id,
+        len(written_files),
+        len(generated_code),
+    )
+
+    result: dict[str, Any] = {
         "current_step": "write_files",
         "completed_steps": ["write_files"],
     }
+    if errors:
+        result["errors"] = errors
+    return result

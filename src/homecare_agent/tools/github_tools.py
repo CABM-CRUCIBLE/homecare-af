@@ -50,18 +50,23 @@ def create_pull_request(
         dict with pr_number, html_url, state.
     """
     repo_name = _clean_repo_name(repo_name_or_url)
-    gh = _get_github_client(token)
-    repo = gh.get_repo(repo_name)
+    try:
+        gh = _get_github_client(token)
+        repo = gh.get_repo(repo_name)
 
-    logger.info("Opening PR on %s: %s (%s -> %s)", repo_name, title, head, base)
-    pr = repo.create_pull(title=title, body=body, head=head, base=base)
+        logger.info("Opening PR on %s: %s (%s -> %s)", repo_name, title, head, base)
+        pr = repo.create_pull(title=title, body=body, head=head, base=base)
 
-    return {
-        "pr_number": pr.number,
-        "html_url": pr.html_url,
-        "state": pr.state,
-        "title": pr.title,
-    }
+        logger.info("Successfully created PR #%d on %s: %s", pr.number, repo_name, pr.html_url)
+        return {
+            "pr_number": pr.number,
+            "html_url": pr.html_url,
+            "state": pr.state,
+            "title": pr.title,
+        }
+    except Exception as e:
+        logger.error("Failed to create PR on %s: %s", repo_name, e, exc_info=True)
+        raise
 
 
 def get_pr_diff(
@@ -73,20 +78,27 @@ def get_pr_diff(
     import httpx
 
     repo_name = _clean_repo_name(repo_name_or_url)
-    gh = _get_github_client(token)
-    repo = gh.get_repo(repo_name)
-    pr = repo.get_pull(pr_number)
+    try:
+        gh = _get_github_client(token)
+        repo = gh.get_repo(repo_name)
+        pr = repo.get_pull(pr_number)
 
-    # Fetch raw diff via diff_url with auth headers
-    headers = {"Accept": "application/vnd.github.v3.diff"}
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
+        # Fetch raw diff via diff_url with auth headers
+        headers = {"Accept": "application/vnd.github.v3.diff"}
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
 
-    with httpx.Client() as client:
-        response = client.get(pr.diff_url, headers=headers, follow_redirects=True)
-        if response.status_code == 200:
-            return response.text
-    return ""
+        with httpx.Client() as client:
+            response = client.get(pr.diff_url, headers=headers, follow_redirects=True)
+            if response.status_code == 200:
+                logger.info("Retrieved %d bytes diff for PR #%d on %s", len(response.text), pr_number, repo_name)
+                return response.text
+            else:
+                logger.warning("Failed to fetch diff for PR #%d (status code: %d)", pr_number, response.status_code)
+        return ""
+    except Exception as e:
+        logger.error("Error retrieving PR diff for #%d on %s: %s", pr_number, repo_name, e, exc_info=True)
+        return ""
 
 
 def add_review_comment(
@@ -100,13 +112,18 @@ def add_review_comment(
 ) -> dict[str, Any]:
     """Add a review comment to a specific line in a PR diff."""
     repo_name = _clean_repo_name(repo_name_or_url)
-    gh = _get_github_client(token)
-    repo = gh.get_repo(repo_name)
-    pr = repo.get_pull(pr_number)
-    commit = repo.get_commit(commit_id)
+    try:
+        gh = _get_github_client(token)
+        repo = gh.get_repo(repo_name)
+        pr = repo.get_pull(pr_number)
+        commit = repo.get_commit(commit_id)
 
-    comment = pr.create_review_comment(body=body, commit=commit, path=path, line=line)
-    return {"id": comment.id, "html_url": comment.html_url}
+        comment = pr.create_review_comment(body=body, commit=commit, path=path, line=line)
+        logger.info("Added review comment #%d to %s:%d on PR #%d", comment.id, path, line, pr_number)
+        return {"id": comment.id, "html_url": comment.html_url}
+    except Exception as e:
+        logger.error("Failed to add review comment to PR #%d: %s", pr_number, e, exc_info=True)
+        raise
 
 
 def post_pr_review(
@@ -119,16 +136,21 @@ def post_pr_review(
 ) -> dict[str, Any]:
     """Submit a formal Pull Request Review."""
     repo_name = _clean_repo_name(repo_name_or_url)
-    gh = _get_github_client(token)
-    repo = gh.get_repo(repo_name)
-    pr = repo.get_pull(pr_number)
+    try:
+        gh = _get_github_client(token)
+        repo = gh.get_repo(repo_name)
+        pr = repo.get_pull(pr_number)
 
-    review_args: dict[str, Any] = {"body": body, "event": event}
-    if comments:
-        review_args["comments"] = comments
+        review_args: dict[str, Any] = {"body": body, "event": event}
+        if comments:
+            review_args["comments"] = comments
 
-    review = pr.create_review(**review_args)
-    return {"id": review.id, "state": review.state, "html_url": review.html_url}
+        review = pr.create_review(**review_args)
+        logger.info("Submitted PR review #%d (%s) on PR #%d", review.id, event, pr_number)
+        return {"id": review.id, "state": review.state, "html_url": review.html_url}
+    except Exception as e:
+        logger.error("Failed to submit PR review on PR #%d: %s", pr_number, e, exc_info=True)
+        raise
 
 
 def _clean_repo_name(repo_name_or_url: str) -> str:

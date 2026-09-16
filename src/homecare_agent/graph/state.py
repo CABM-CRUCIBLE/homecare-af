@@ -71,6 +71,7 @@ class AgentState(TypedDict, total=False):
     clarification_questions: Annotated[list[dict[str, Any]], append_list]
     clarification_answers: Annotated[list[dict[str, Any]], append_list]
     clarification_complete: bool
+    clarification_iteration: int
 
     # ─── Analysis ────────────────────────────────────────────────────────
     codebase_analysis: Annotated[dict[str, Any], merge_dicts]
@@ -83,6 +84,7 @@ class AgentState(TypedDict, total=False):
     adr_documents: Annotated[list[dict[str, Any]], append_list]
     architecture_review: str
     architecture_approved: bool
+    arch_iteration: int
 
     # ─── Agentic Prompts ─────────────────────────────────────────────────
     standing_instructions: str
@@ -109,11 +111,12 @@ class AgentState(TypedDict, total=False):
     review_changes_needed: bool
     review_iteration: int
 
-    # ─── Status ──────────────────────────────────────────────────────────
+    # ─── Status & Resource Tracking ───────────────────────────────────────
     current_step: str
     completed_steps: Annotated[list[str], append_list]
     errors: Annotated[list[dict[str, Any]], append_list]
     commit_log: Annotated[list[dict[str, str]], append_list]
+    llm_call_count: int
 
     # ─── Messages (LangGraph built-in) ───────────────────────────────────
     messages: Annotated[list[Any], add_messages]

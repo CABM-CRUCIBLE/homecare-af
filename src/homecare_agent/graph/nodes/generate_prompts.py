@@ -91,7 +91,9 @@ async def generate_agentic_prompts(
     Returns:
         State updates with agentic prompts, file ownership matrix, and standing instructions.
     """
-    logger.info("Generating agentic prompts for: %s", state.get("feature_name"))
+    trace_id = state.get("trace_id", "no-trace")
+    feature_name = state.get("feature_name", "Unknown")
+    logger.info("[START:generate_agentic_prompts][trace_id=%s] Generating agentic prompts for: %s", trace_id, feature_name)
 
     # Generate standing instructions
     repo_path = state.get("repo_path", settings.repo_path)
@@ -102,8 +104,8 @@ async def generate_agentic_prompts(
     adr_docs = state.get("adr_documents", [])
 
     architecture_docs = f"""\
-2. Strategy Document for {state.get("feature_name", "")}
-3. Tactical Plan for {state.get("feature_name", "")}
+2. Strategy Document for {feature_name}
+3. Tactical Plan for {feature_name}
 """
     for adr in adr_docs:
         architecture_docs += f"4. {adr.get('title', 'ADR')}\n"
@@ -121,7 +123,7 @@ async def generate_agentic_prompts(
 
     prompt_gen_prompt = f"""Generate self-contained agentic execution prompts for the following feature.
 
-**Feature:** {state.get("feature_name")}
+**Feature:** {feature_name}
 
 **Standing Instructions (to be prepended to every prompt):**
 {standing_instructions}
@@ -154,13 +156,14 @@ Output as a JSON object with keys:
 """
 
     try:
+        logger.debug("[generate_agentic_prompts][trace_id=%s] Invoking LLM for prompt decomposition...", trace_id)
         response = await llm.ainvoke(
             prompt=prompt_gen_prompt,
             system_prompt=PROMPT_GENERATOR_PERSONA,
             node_name="generate_agentic_prompts",
             state_overrides=state,
             trace_name="generate_agentic_prompts",
-            trace_metadata={"feature_name": state.get("feature_name", "")},
+            trace_metadata={"feature_name": feature_name, "trace_id": trace_id},
         )
 
         import json
@@ -169,6 +172,8 @@ Output as a JSON object with keys:
         json_end = response.rfind("}") + 1
         if json_start != -1 and json_end > json_start:
             parsed = json.loads(response[json_start:json_end])
+        else:
+            logger.warning("[WARN:generate_agentic_prompts][trace_id=%s] No valid JSON block found in LLM response", trace_id)
 
         waves = parsed.get("waves", [])
         all_wps = []
@@ -176,6 +181,13 @@ Output as a JSON object with keys:
             for wp in wave.get("work_packages", []):
                 wp["wave"] = wave.get("wave_id", "")
                 all_wps.append(wp)
+
+        logger.info(
+            "[COMPLETED:generate_agentic_prompts][trace_id=%s] Generated %d work packages across %d wave(s)",
+            trace_id,
+            len(all_wps),
+            len(waves),
+        )
 
         return {
             "standing_instructions": standing_instructions,
@@ -186,11 +198,17 @@ Output as a JSON object with keys:
             "completed_steps": ["generate_agentic_prompts"],
         }
 
-    except Exception:
-        logger.exception("Agentic prompt generation failed.")
+    except Exception as e:
+        logger.error(
+            "[ERROR:generate_agentic_prompts][trace_id=%s] Agentic prompt generation failed for '%s': %s",
+            trace_id,
+            feature_name,
+            e,
+            exc_info=True,
+        )
         return {
             "standing_instructions": standing_instructions,
-            "errors": [{"step": "generate_agentic_prompts", "message": "Prompt generation failed"}],
+            "errors": [{"step": "generate_agentic_prompts", "trace_id": trace_id, "message": f"Prompt generation failed: {e}"}],
             "current_step": "generate_agentic_prompts",
             "completed_steps": ["generate_agentic_prompts"],
         }

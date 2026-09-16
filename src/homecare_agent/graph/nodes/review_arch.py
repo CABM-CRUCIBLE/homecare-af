@@ -67,7 +67,9 @@ async def review_architecture(state: AgentState, settings: Settings, llm: LLMPro
     Returns:
         State updates with review findings and approval status.
     """
-    logger.info("Performing architecture review for: %s", state.get("feature_name"))
+    trace_id = state.get("trace_id", "no-trace")
+    feature_name = state.get("feature_name", "Unknown")
+    logger.info("[START:review_architecture][trace_id=%s] Performing architecture review for: %s", trace_id, feature_name)
 
     strategy = state.get("strategy_document", "")
     tactical = state.get("tactical_plan", "")
@@ -80,7 +82,7 @@ async def review_architecture(state: AgentState, settings: Settings, llm: LLMPro
 
     review_prompt = f"""Perform a comprehensive architecture review of the following proposal.
 
-**Feature:** {state.get("feature_name")}
+**Feature:** {feature_name}
 
 **Strategy Document:**
 {strategy[:15000]}
@@ -121,13 +123,14 @@ Generate the review as a COMPLETE markdown document following this structure:
 """
 
     try:
+        logger.debug("[review_architecture][trace_id=%s] Invoking LLM for architecture review...", trace_id)
         response = await llm.ainvoke(
             prompt=review_prompt,
             system_prompt=REVIEWER_PERSONA,
             node_name="review_architecture",
             state_overrides=state,
             trace_name="architecture_review",
-            trace_metadata={"feature_name": state.get("feature_name", "")},
+            trace_metadata={"feature_name": feature_name, "trace_id": trace_id},
         )
 
         # Determine if architecture is approved based on review content
@@ -137,6 +140,13 @@ Generate the review as a COMPLETE markdown document following this structure:
 
         approved = not (has_blocking and is_rejected)
 
+        logger.info(
+            "[COMPLETED:review_architecture][trace_id=%s] Architecture review completed (approved=%s, %d chars generated)",
+            trace_id,
+            approved,
+            len(response),
+        )
+
         return {
             "architecture_review": response,
             "architecture_approved": approved,
@@ -144,12 +154,18 @@ Generate the review as a COMPLETE markdown document following this structure:
             "completed_steps": ["review_architecture"],
         }
 
-    except Exception:
-        logger.exception("Architecture review failed.")
+    except Exception as e:
+        logger.error(
+            "[ERROR:review_architecture][trace_id=%s] Architecture review failed for '%s': %s",
+            trace_id,
+            feature_name,
+            e,
+            exc_info=True,
+        )
         return {
             "architecture_review": "Review failed — see errors.",
             "architecture_approved": False,
-            "errors": [{"step": "review_architecture", "message": "Architecture review failed"}],
+            "errors": [{"step": "review_architecture", "trace_id": trace_id, "message": f"Architecture review failed: {e}"}],
             "current_step": "review_architecture",
             "completed_steps": ["review_architecture"],
         }

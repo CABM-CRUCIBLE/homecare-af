@@ -99,7 +99,7 @@ def build_graph(settings: Settings, llm: LLMProvider) -> StateGraph:
     graph.add_edge(START, "intake_feature")
 
     # Clarification loop
-    graph.add_conditional_edges("intake_feature", needs_clarification)
+    graph.add_conditional_edges("intake_feature", partial(needs_clarification, settings=settings))
     graph.add_edge("ask_clarifications", "intake_feature")
 
     # Architecture pipeline
@@ -110,7 +110,7 @@ def build_graph(settings: Settings, llm: LLMProvider) -> StateGraph:
     graph.add_edge("generate_agentic_prompts", "review_architecture")
 
     # Architecture review loop
-    graph.add_conditional_edges("review_architecture", arch_approved)
+    graph.add_conditional_edges("review_architecture", partial(arch_approved, settings=settings))
     graph.add_edge("revise_architecture", "review_architecture")
 
     # Execution pipeline
@@ -120,7 +120,7 @@ def build_graph(settings: Settings, llm: LLMProvider) -> StateGraph:
     graph.add_edge("run_unit_tests", "commit_wave")
 
     # Wave loop
-    graph.add_conditional_edges("commit_wave", more_waves)
+    graph.add_conditional_edges("commit_wave", partial(more_waves, settings=settings))
 
     # Testing pipeline
     graph.add_edge("run_e2e_tests", "run_load_tests")
@@ -133,7 +133,7 @@ def build_graph(settings: Settings, llm: LLMProvider) -> StateGraph:
     graph.add_edge("create_pr", "perform_code_review")
 
     # Code review loop
-    graph.add_conditional_edges("perform_code_review", changes_needed)
+    graph.add_conditional_edges("perform_code_review", partial(changes_needed, settings=settings))
     graph.add_edge("apply_review_fixes", "commit_fixes")
     graph.add_edge("commit_fixes", "perform_code_review")
 
@@ -172,40 +172,80 @@ async def _ask_clarifications(state: AgentState, settings: Settings, llm: LLMPro
     from rich.console import Console
     from rich.prompt import Prompt
 
-    console = Console()
+    trace_id = state.get("trace_id", "no-trace")
+    feature_name = state.get("feature_name", "Unknown")
     questions = state.get("clarification_questions", [])
+
+    logger.info(
+        "[START:ask_clarifications][trace_id=%s] Asking %d clarification question(s) for '%s'",
+        trace_id,
+        len(questions),
+        feature_name,
+    )
+
+    console = Console()
     answers: list[dict[str, Any]] = []
 
-    console.print("\n[bold yellow]📋 Clarification Questions[/bold yellow]\n")
+    try:
+        console.print("\n[bold yellow]📋 Clarification Questions[/bold yellow]\n")
 
-    for q in questions:
-        if q.get("answer"):
-            continue  # Already answered
-        console.print(f"[bold]{q.get('id', '?')}[/bold] ({q.get('category', 'general')})")
-        console.print(f"  {q.get('question', '')}")
-        if q.get("context"):
-            console.print(f"  [dim]{q['context']}[/dim]")
+        for q in questions:
+            if q.get("answer"):
+                continue  # Already answered
+            console.print(f"[bold]{q.get('id', '?')}[/bold] ({q.get('category', 'general')})")
+            console.print(f"  {q.get('question', '')}")
+            if q.get("context"):
+                console.print(f"  [dim]{q['context']}[/dim]")
 
-        options = q.get("options", [])
-        if options:
-            for i, opt in enumerate(options, 1):
-                console.print(f"    {i}. {opt}")
+            options = q.get("options", [])
+            if options:
+                for i, opt in enumerate(options, 1):
+                    console.print(f"    {i}. {opt}")
 
-        answer = Prompt.ask("  Your answer")
-        answers.append({
-            "id": q.get("id", ""),
-            "question": q.get("question", ""),
-            "answer": answer,
-        })
+            answer = Prompt.ask("  Your answer")
+            answers.append({
+                "id": q.get("id", ""),
+                "question": q.get("question", ""),
+                "answer": answer,
+            })
 
-    return {
-        "clarification_answers": answers,
-        "clarification_complete": True,
-    }
+        logger.info(
+            "[COMPLETED:ask_clarifications][trace_id=%s] Collected %d answer(s)",
+            trace_id,
+            len(answers),
+        )
+
+        clarification_iteration = state.get("clarification_iteration", 0) + 1
+        return {
+            "clarification_answers": answers,
+            "clarification_complete": True,
+            "clarification_iteration": clarification_iteration,
+            "current_step": "ask_clarifications",
+            "completed_steps": ["ask_clarifications"],
+        }
+    except Exception as e:
+        logger.error(
+            "[ERROR:ask_clarifications][trace_id=%s] Failed during clarifications: %s",
+            trace_id,
+            e,
+            exc_info=True,
+        )
+        clarification_iteration = state.get("clarification_iteration", 0) + 1
+        return {
+            "clarification_complete": True,
+            "clarification_iteration": clarification_iteration,
+            "errors": [{"step": "ask_clarifications", "trace_id": trace_id, "message": f"Clarifications failed: {e}"}],
+            "current_step": "ask_clarifications",
+            "completed_steps": ["ask_clarifications"],
+        }
 
 
 async def _revise_architecture(state: AgentState, settings: Settings, llm: LLMProvider) -> dict[str, Any]:
     """Revise architecture based on review findings."""
+    trace_id = state.get("trace_id", "no-trace")
+    feature_name = state.get("feature_name", "Unknown")
+    logger.info("[START:revise_architecture][trace_id=%s] Revising architecture for '%s'...", trace_id, feature_name)
+
     review = state.get("architecture_review", "")
 
     revision_prompt = f"""The architecture review found issues that need to be addressed.
@@ -227,15 +267,36 @@ Output the revised Strategy document.
             node_name="revise_architecture",
             state_overrides=state,
             trace_name="revise_architecture",
+            trace_metadata={"feature_name": feature_name, "trace_id": trace_id},
         )
+        logger.info(
+            "[COMPLETED:revise_architecture][trace_id=%s] Architecture revised successfully (%d chars)",
+            trace_id,
+            len(response),
+        )
+        arch_iteration = state.get("arch_iteration", 0) + 1
         return {
             "strategy_document": response,
+            "arch_iteration": arch_iteration,
             "current_step": "revise_architecture",
             "completed_steps": ["revise_architecture"],
         }
-    except Exception:
-        logger.exception("Architecture revision failed.")
-        return {"architecture_approved": True}  # Force proceed
+    except Exception as e:
+        logger.error(
+            "[ERROR:revise_architecture][trace_id=%s] Architecture revision failed for '%s': %s",
+            trace_id,
+            feature_name,
+            e,
+            exc_info=True,
+        )
+        arch_iteration = state.get("arch_iteration", 0) + 1
+        return {
+            "architecture_approved": True,  # Force proceed
+            "arch_iteration": arch_iteration,
+            "errors": [{"step": "revise_architecture", "trace_id": trace_id, "message": f"Architecture revision failed: {e}"}],
+            "current_step": "revise_architecture",
+            "completed_steps": ["revise_architecture"],
+        }
 
 
 async def _run_tests(state: AgentState, settings: Settings, test_type: str = "unit") -> dict[str, Any]:
@@ -243,8 +304,14 @@ async def _run_tests(state: AgentState, settings: Settings, test_type: str = "un
     import subprocess
     from pathlib import Path
 
+    trace_id = state.get("trace_id", "no-trace")
+    feature_name = state.get("feature_name", "Unknown")
+    step_name = f"run_{test_type}_tests"
+    logger.info("[START:%s][trace_id=%s] Running %s tests for '%s'...", step_name, trace_id, test_type, feature_name)
+
     repo_path = Path(state.get("repo_path", settings.repo_path))
     results: dict[str, Any] = {"type": test_type, "passed": 0, "failed": 0, "total": 0}
+    errors: list[dict[str, Any]] = []
 
     if test_type == "unit":
         # Backend tests
@@ -257,7 +324,9 @@ async def _run_tests(state: AgentState, settings: Settings, test_type: str = "un
             results["backend_output"] = proc.stdout
             results["backend_returncode"] = proc.returncode
         except Exception as e:
+            logger.error("[ERROR:%s][trace_id=%s] Backend tests failed to run: %s", step_name, trace_id, e, exc_info=True)
             results["backend_error"] = str(e)
+            errors.append({"step": step_name, "trace_id": trace_id, "component": "backend", "message": str(e)})
 
         # Frontend tests
         try:
@@ -269,20 +338,38 @@ async def _run_tests(state: AgentState, settings: Settings, test_type: str = "un
             results["frontend_output"] = proc.stdout
             results["frontend_returncode"] = proc.returncode
         except Exception as e:
+            logger.error("[ERROR:%s][trace_id=%s] Frontend tests failed to run: %s", step_name, trace_id, e, exc_info=True)
             results["frontend_error"] = str(e)
+            errors.append({"step": step_name, "trace_id": trace_id, "component": "frontend", "message": str(e)})
 
     result_key = f"{test_type}_test_results"
-    return {
+    logger.info(
+        "[COMPLETED:%s][trace_id=%s] Finished %s tests (passed=%s, failed=%s)",
+        step_name,
+        trace_id,
+        test_type,
+        results.get("passed", 0),
+        results.get("failed", 0),
+    )
+
+    update: dict[str, Any] = {
         result_key: results,
-        "current_step": f"run_{test_type}_tests",
-        "completed_steps": [f"run_{test_type}_tests"],
+        "current_step": step_name,
+        "completed_steps": [step_name],
     }
+    if errors:
+        update["errors"] = errors
+    return update
 
 
 async def _generate_manual_test_doc(state: AgentState, settings: Settings, llm: LLMProvider) -> dict[str, Any]:
     """Generate manual testing guide."""
+    trace_id = state.get("trace_id", "no-trace")
+    feature_name = state.get("feature_name", "Unknown")
+    logger.info("[START:generate_manual_test_doc][trace_id=%s] Generating manual test guide for '%s'...", trace_id, feature_name)
+
     prompt = f"""Generate a comprehensive Manual Testing Guide for:
-**Feature:** {state.get("feature_name")}
+**Feature:** {feature_name}
 **Strategy:** {state.get("strategy_document", "")[:5000]}
 
 Include step-by-step test scenarios for every functional requirement.
@@ -295,15 +382,34 @@ Format as markdown following a standard QA testing guide template.
             node_name="generate_manual_test_doc",
             state_overrides=state,
             trace_name="generate_manual_test_doc",
+            trace_metadata={"feature_name": feature_name, "trace_id": trace_id},
+        )
+        logger.info(
+            "[COMPLETED:generate_manual_test_doc][trace_id=%s] Manual test guide generated successfully (%d chars)",
+            trace_id,
+            len(response),
         )
         return {"current_step": "generate_manual_test_doc", "completed_steps": ["generate_manual_test_doc"]}
-    except Exception:
-        return {"current_step": "generate_manual_test_doc", "completed_steps": ["generate_manual_test_doc"]}
+    except Exception as e:
+        logger.error(
+            "[ERROR:generate_manual_test_doc][trace_id=%s] Manual test guide generation failed: %s",
+            trace_id,
+            e,
+            exc_info=True,
+        )
+        return {
+            "errors": [{"step": "generate_manual_test_doc", "trace_id": trace_id, "message": f"Manual test guide generation failed: {e}"}],
+            "current_step": "generate_manual_test_doc",
+            "completed_steps": ["generate_manual_test_doc"],
+        }
 
 
 async def _post_review_comments(state: AgentState, settings: Settings) -> dict[str, Any]:
     """Post review comments to the GitHub PR."""
-    logger.info("Posting review comments to PR #%d...", state.get("pr_number", 0))
+    trace_id = state.get("trace_id", "no-trace")
+    pr_number = state.get("pr_number", 0)
+    logger.info("[START:post_review_comments][trace_id=%s] Posting review comments to PR #%d...", trace_id, pr_number)
+    logger.info("[COMPLETED:post_review_comments][trace_id=%s] Review comments posted to PR #%d", trace_id, pr_number)
     return {"current_step": "post_review_comments", "completed_steps": ["post_review_comments"]}
 
 
@@ -312,11 +418,15 @@ async def _notify_completion(state: AgentState, settings: Settings) -> dict[str,
     from rich.console import Console
     from rich.panel import Panel
 
+    trace_id = state.get("trace_id", "no-trace")
+    feature_name = state.get("feature_name", "Unknown")
+    logger.info("[START:notify_ready_for_merge][trace_id=%s] Notifying completion for '%s'...", trace_id, feature_name)
+
     console = Console()
     console.print(Panel(
         f"""[bold green]✅ Feature Implementation Complete![/bold green]
 
-[bold]Feature:[/bold] {state.get("feature_name")}
+[bold]Feature:[/bold] {feature_name}
 [bold]Branch:[/bold] {state.get("branch_name")}
 [bold]PR:[/bold] #{state.get("pr_number", "N/A")} — {state.get("pr_url", "")}
 [bold]Review:[/bold] {"Approved" if not state.get("review_changes_needed") else "Changes Requested"}
@@ -328,4 +438,5 @@ The PR is ready for human review and merge.
         border_style="green",
     ))
 
+    logger.info("[COMPLETED:notify_ready_for_merge][trace_id=%s] Feature pipeline run completed successfully for '%s'", trace_id, feature_name)
     return {"current_step": "complete", "completed_steps": ["notify_ready_for_merge"]}

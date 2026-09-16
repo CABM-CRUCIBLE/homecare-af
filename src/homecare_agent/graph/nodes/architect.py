@@ -66,20 +66,23 @@ async def generate_strategy(state: AgentState, settings: Settings, llm: LLMProvi
     13. Risk Register
     14. Open Questions & Execution Gate
     """
-    logger.info("Generating Strategy document for: %s", state.get("feature_name"))
+    trace_id = state.get("trace_id", "no-trace")
+    feature_name = state.get("feature_name", "Unknown")
+    logger.info("[START:generate_strategy][trace_id=%s] Generating Strategy document for '%s'...", trace_id, feature_name)
 
     # Load the strategy template
     template_path = Path(settings.templates_dir) / "STRATEGY_TEMPLATE.md"
     template = ""
     if template_path.exists():
         template = template_path.read_text(encoding="utf-8")
+        logger.debug("[generate_strategy][trace_id=%s] Loaded template from %s (%d chars)", trace_id, template_path, len(template))
 
     codebase_analysis = state.get("codebase_analysis", {})
     clarification_answers = state.get("clarification_answers", [])
 
     strategy_prompt = f"""Generate a complete Strategy Document for this feature.
 
-**Feature:** {state.get("feature_name")}
+**Feature:** {feature_name}
 **Description:** {state.get("feature_description")}
 
 **Codebase Analysis Results:**
@@ -105,25 +108,37 @@ Output the COMPLETE markdown document. No placeholders.
 """
 
     try:
+        logger.debug("[generate_strategy][trace_id=%s] Invoking LLM for Strategy synthesis...", trace_id)
         response = await llm.ainvoke(
             prompt=strategy_prompt,
             system_prompt=ARCHITECT_PERSONA,
             node_name="generate_strategy",
             state_overrides=state,
             trace_name="generate_strategy",
-            trace_metadata={"feature_name": state.get("feature_name", "")},
+            trace_metadata={"feature_name": feature_name, "trace_id": trace_id},
         )
 
+        logger.info(
+            "[COMPLETED:generate_strategy][trace_id=%s] Strategy document generated successfully (%d chars)",
+            trace_id,
+            len(response),
+        )
         return {
             "strategy_document": response,
             "current_step": "generate_strategy",
             "completed_steps": ["generate_strategy"],
         }
 
-    except Exception:
-        logger.exception("Strategy generation failed.")
+    except Exception as e:
+        logger.error(
+            "[ERROR:generate_strategy][trace_id=%s] Strategy generation failed for '%s': %s",
+            trace_id,
+            feature_name,
+            e,
+            exc_info=True,
+        )
         return {
-            "errors": [{"step": "generate_strategy", "message": "Strategy generation failed"}],
+            "errors": [{"step": "generate_strategy", "trace_id": trace_id, "message": f"Strategy generation failed: {e}"}],
             "current_step": "generate_strategy",
             "completed_steps": ["generate_strategy"],
         }
@@ -138,66 +153,79 @@ async def generate_tactical_plan(state: AgentState, settings: Settings, llm: LLM
     3. Status Vocabularies and State Machines
     4. Migration Plan
     5. High-Level Design — Component Diagram
-    6. API Endpoints (method, route, handler, auth, status codes)
-    7. Data Transfer Objects
-    8. Frontend Route and Component Map
-    9. Responsive and Accessibility Specification
-    10. Work Package Breakdown & Sequencing
-    11. Test Strategy
-    12. Observability
-    13. Definition of Done
+    6. API Surface (REST endpoints, route, verb, auth, request, response, errors)
+    7. MediatR Commands and Queries (CQRS handlers)
+    8. Frontend Architecture & BFF Route Handlers
+    9. Acceptance Criteria Mapping (Gherkin format per FR)
+    10. Security & Compliance Checklist (HIPAA, tenant isolation, audit)
+    11. Implementation Wave Dependencies (gantt chart)
+    12. Rollback Strategy
     """
-    logger.info("Generating Tactical Plan for: %s", state.get("feature_name"))
+    trace_id = state.get("trace_id", "no-trace")
+    feature_name = state.get("feature_name", "Unknown")
+    logger.info("[START:generate_tactical_plan][trace_id=%s] Generating Tactical Plan for '%s'...", trace_id, feature_name)
 
     template_path = Path(settings.templates_dir) / "TACTICAL_PLAN_TEMPLATE.md"
     template = ""
     if template_path.exists():
         template = template_path.read_text(encoding="utf-8")
+        logger.debug("[generate_tactical_plan][trace_id=%s] Loaded template from %s (%d chars)", trace_id, template_path, len(template))
 
-    tactical_prompt = f"""Generate a complete Tactical Plan for this feature.
-This is the implementation blueprint that drives code generation.
+    strategy_doc = state.get("strategy_document", "")
 
-**Feature:** {state.get("feature_name")}
-**Strategy Document (already approved):**
-{state.get("strategy_document", "")[:15000]}
+    tactical_prompt = f"""Generate a complete Tactical Plan based on the approved Strategy Document.
+
+**Feature:** {feature_name}
+
+**Strategy Document:**
+{strategy_doc}
 
 {f"**Template to follow:**{chr(10)}{template}" if template else ""}
 
 REQUIREMENTS:
-1. ERD as a Mermaid erDiagram with complete column definitions
-2. EVERY database table must list: columns (name, type, nullable), indexes, CHECK constraints, FK behaviors
-3. Complete API endpoint table: #, method, route, handler class, description, request DTO, response DTO, auth policy, status codes
-4. Complete frontend route map with render strategy (RSC vs client)
-5. DTO specifications with all fields and types
-6. Work Package Breakdown organized into waves with dependencies and estimated effort
-7. Gantt chart (Mermaid) showing wave scheduling
-8. File-ownership matrix for collision avoidance
-9. Test strategy covering unit, integration, E2E, and load testing
-10. Responsive breakpoints and accessibility (WCAG 2.1 AA) specifications
+1. Include a COMPLETE Mermaid ER diagram with ALL entities, attributes, and relationships
+2. Table schemas must specify: column, type, NULL/NOT NULL, default, constraints (FK, CHECK, UNIQUE)
+3. API endpoints must follow RESTful conventions: route, verb, auth policy, request DTO, response DTO
+4. Every MediatR command and query must specify: Name, Request DTO, Response DTO, Validator rules
+5. Frontend components must follow the Server-First RSC pattern with BFF proxy routes
+6. Every acceptance criterion must be in Gherkin (Given/When/Then) format
+7. Include the implementation wave dependency matrix
 
 Output the COMPLETE markdown document. No placeholders.
 """
 
     try:
+        logger.debug("[generate_tactical_plan][trace_id=%s] Invoking LLM for Tactical Plan synthesis...", trace_id)
         response = await llm.ainvoke(
             prompt=tactical_prompt,
             system_prompt=ARCHITECT_PERSONA,
             node_name="generate_tactical_plan",
             state_overrides=state,
             trace_name="generate_tactical_plan",
-            trace_metadata={"feature_name": state.get("feature_name", "")},
+            trace_metadata={"feature_name": feature_name, "trace_id": trace_id},
         )
 
+        logger.info(
+            "[COMPLETED:generate_tactical_plan][trace_id=%s] Tactical Plan generated successfully (%d chars)",
+            trace_id,
+            len(response),
+        )
         return {
             "tactical_plan": response,
             "current_step": "generate_tactical_plan",
             "completed_steps": ["generate_tactical_plan"],
         }
 
-    except Exception:
-        logger.exception("Tactical plan generation failed.")
+    except Exception as e:
+        logger.error(
+            "[ERROR:generate_tactical_plan][trace_id=%s] Tactical plan generation failed for '%s': %s",
+            trace_id,
+            feature_name,
+            e,
+            exc_info=True,
+        )
         return {
-            "errors": [{"step": "generate_tactical_plan", "message": "Tactical plan generation failed"}],
+            "errors": [{"step": "generate_tactical_plan", "trace_id": trace_id, "message": f"Tactical plan generation failed: {e}"}],
             "current_step": "generate_tactical_plan",
             "completed_steps": ["generate_tactical_plan"],
         }
@@ -215,17 +243,20 @@ async def generate_adrs(state: AgentState, settings: Settings, llm: LLMProvider)
     - Compliance Notes
     - Validation criteria
     """
-    logger.info("Generating ADRs for: %s", state.get("feature_name"))
+    trace_id = state.get("trace_id", "no-trace")
+    feature_name = state.get("feature_name", "Unknown")
+    logger.info("[START:generate_adrs][trace_id=%s] Generating ADRs for '%s'...", trace_id, feature_name)
 
     template_path = Path(settings.templates_dir) / "ADR_TEMPLATE.md"
     template = ""
     if template_path.exists():
         template = template_path.read_text(encoding="utf-8")
+        logger.debug("[generate_adrs][trace_id=%s] Loaded template from %s (%d chars)", trace_id, template_path, len(template))
 
     adr_prompt = f"""Based on the Strategy and Tactical Plan, identify and generate
 Architecture Decision Records (ADRs) for every architecturally significant decision.
 
-**Feature:** {state.get("feature_name")}
+**Feature:** {feature_name}
 
 **Strategy Document:**
 {state.get("strategy_document", "")[:10000]}
@@ -251,13 +282,14 @@ Output as a JSON array of ADR objects, each with keys:
 """
 
     try:
+        logger.debug("[generate_adrs][trace_id=%s] Invoking LLM for ADR generation...", trace_id)
         response = await llm.ainvoke(
             prompt=adr_prompt,
             system_prompt=ARCHITECT_PERSONA,
             node_name="generate_adrs",
             state_overrides=state,
             trace_name="generate_adrs",
-            trace_metadata={"feature_name": state.get("feature_name", "")},
+            trace_metadata={"feature_name": feature_name, "trace_id": trace_id},
         )
 
         # Parse ADR list
@@ -269,18 +301,25 @@ Output as a JSON array of ADR objects, each with keys:
             adrs = json.loads(response[json_start:json_end])
         else:
             # Treat the whole response as a single ADR document
-            adrs = [{"number": 1, "title": state.get("feature_name", ""), "rendered_markdown": response}]
+            adrs = [{"number": 1, "title": feature_name, "rendered_markdown": response}]
 
+        logger.info("[COMPLETED:generate_adrs][trace_id=%s] Successfully generated %d ADR(s)", trace_id, len(adrs))
         return {
             "adr_documents": adrs,
             "current_step": "generate_adrs",
             "completed_steps": ["generate_adrs"],
         }
 
-    except Exception:
-        logger.exception("ADR generation failed.")
+    except Exception as e:
+        logger.error(
+            "[ERROR:generate_adrs][trace_id=%s] ADR generation failed for '%s': %s",
+            trace_id,
+            feature_name,
+            e,
+            exc_info=True,
+        )
         return {
-            "errors": [{"step": "generate_adrs", "message": "ADR generation failed"}],
+            "errors": [{"step": "generate_adrs", "trace_id": trace_id, "message": f"ADR generation failed: {e}"}],
             "current_step": "generate_adrs",
             "completed_steps": ["generate_adrs"],
         }

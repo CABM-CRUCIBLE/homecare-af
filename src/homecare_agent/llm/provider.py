@@ -12,6 +12,7 @@ Enforces a single unified trace ID across the entire workflow run.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import logging
 import re
@@ -23,10 +24,62 @@ from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 
 from homecare_agent.config import Settings
+from homecare_agent.security.redaction import redact_secrets
 
 logger = logging.getLogger(__name__)
 
 _HEX_32_PATTERN = re.compile(r"^[0-9a-f]{32}$")
+
+
+class InsufficientCreditsError(Exception):
+    """Raised when OpenRouter API key has exhausted credits (HTTP 402)."""
+
+    pass
+
+
+class LLMBudgetExceededError(Exception):
+    """Raised when workflow exceeds maximum permitted LLM calls per run."""
+
+    pass
+
+
+def _is_credit_exhaustion_error(exc: Exception) -> bool:
+    """Check if exception represents credit exhaustion or payment required."""
+    err_str = str(exc).lower()
+    status_code = getattr(exc, "status_code", None)
+    if not status_code and hasattr(exc, "response"):
+        status_code = getattr(exc.response, "status_code", None)
+    if status_code == 402:
+        return True
+    keywords = [
+        "insufficient_credits",
+        "insufficient credits",
+        "payment required",
+        "out of credits",
+        "credit balance is too low",
+        "exceeded your current quota",
+        "402",
+    ]
+    return any(kw in err_str for kw in keywords)
+
+
+def _is_retryable_error(exc: Exception) -> bool:
+    """Check if exception is a transient error eligible for retry."""
+    err_str = str(exc).lower()
+    status_code = getattr(exc, "status_code", None)
+    if not status_code and hasattr(exc, "response"):
+        status_code = getattr(exc.response, "status_code", None)
+    if status_code in (429, 502, 503, 504):
+        return True
+    retry_keywords = [
+        "rate limit",
+        "too many requests",
+        "connection reset",
+        "service unavailable",
+        "gateway timeout",
+        "bad gateway",
+    ]
+    return any(kw in err_str for kw in retry_keywords)
 
 
 def normalize_trace_id(trace_id: str | None) -> str:
@@ -47,6 +100,7 @@ def normalize_trace_id(trace_id: str | None) -> str:
 
     # Deterministically hash non-conforming IDs to a valid 32-char hex string
     return hashlib.md5(cleaned.encode("utf-8")).hexdigest()
+
 
 
 class LLMProvider:
@@ -73,6 +127,8 @@ class LLMProvider:
             self._setup_langfuse()
 
         self._model_cache: dict[str, ChatOpenAI] = {}
+        self._call_count = 0
+        self._semaphore = asyncio.Semaphore(max(1, settings.max_parallel_workers))
 
         # Primary LLM (text generation)
         self._llm = self.get_llm(settings.openrouter_model or "anthropic/claude-sonnet-4")
@@ -81,12 +137,19 @@ class LLMProvider:
         self._vision_llm = self.get_llm(settings.effective_vision_model or "anthropic/claude-sonnet-4")
 
         logger.info(
-            "LLM Provider initialized — arch_model=%s, code_model=%s, vision=%s, langfuse=%s",
+            "LLM Provider initialized — arch_model=%s, code_model=%s, vision=%s, langfuse=%s, max_calls=%d, max_workers=%d",
             settings.model_architecture or settings.openrouter_model or "(default)",
             settings.model_code or "(default)",
             settings.effective_vision_model or "(default)",
             settings.langfuse_enabled,
+            settings.max_llm_calls_per_run,
+            settings.max_parallel_workers,
         )
+
+    @property
+    def call_count(self) -> int:
+        """Total number of LLM invocations executed across this provider instance."""
+        return self._call_count
 
     def _setup_langfuse(self) -> None:
         """Initialize Langfuse client and default callback handler."""
@@ -294,7 +357,10 @@ class LLMProvider:
 
         # Configure Langfuse tracing
         kwargs: dict[str, Any] = {}
-        metadata = dict(trace_metadata or {})
+        metadata = {
+            k: (redact_secrets(v) if isinstance(v, str) else v)
+            for k, v in (trace_metadata or {}).items()
+        }
         metadata["effective_model"] = effective_model
         if node_name:
             metadata["node_name"] = node_name
@@ -316,8 +382,64 @@ class LLMProvider:
             effective_model,
             target_trace_id or "none",
         )
-        response = await llm.ainvoke(messages, **kwargs)
-        return str(response.content)
+
+        if self._call_count >= self._settings.max_llm_calls_per_run:
+            raise LLMBudgetExceededError(
+                f"Global LLM call limit reached ({self._call_count}/{self._settings.max_llm_calls_per_run}). "
+                "Halting run to prevent runaway API spend."
+            )
+        self._call_count += 1
+
+        max_retries = max(1, self._settings.max_retries)
+        last_exception: Exception | None = None
+
+        async with self._semaphore:
+            for attempt in range(1, max_retries + 1):
+                try:
+                    response = await llm.ainvoke(messages, **kwargs)
+                    return str(response.content)
+                except Exception as e:
+                    last_exception = e
+                    if _is_credit_exhaustion_error(e):
+                        logger.critical(
+                            "[CRITICAL:LLMProvider][trace_id=%s] Credit exhaustion detected (HTTP 402/insufficient credits): %s. "
+                            "Immediate fail-fast triggered to prevent retries.",
+                            target_trace_id or "none",
+                            e,
+                        )
+                        raise InsufficientCreditsError(
+                            f"OpenRouter API key has insufficient credits: {e}"
+                        ) from e
+
+                    if _is_retryable_error(e) and attempt < max_retries:
+                        backoff = (2 ** attempt) + 0.5
+                        logger.warning(
+                            "[WARN:LLMProvider][trace_id=%s] Transient error on attempt %d/%d for node '%s': %s. Backing off for %.1fs...",
+                            target_trace_id or "none",
+                            attempt,
+                            max_retries,
+                            node_name or "(default)",
+                            e,
+                            backoff,
+                        )
+                        await asyncio.sleep(backoff)
+                        continue
+
+                    logger.error(
+                        "[ERROR:LLMProvider][trace_id=%s] LLM ainvoke failed on attempt %d/%d for node '%s' (model: %s): %s",
+                        target_trace_id or "none",
+                        attempt,
+                        max_retries,
+                        node_name or "(default)",
+                        effective_model,
+                        e,
+                        exc_info=True,
+                    )
+                    raise
+
+        if last_exception:
+            raise last_exception
+        raise RuntimeError("Unexpected state: LLM invocation exited without response or exception.")
 
     async def ainvoke_with_vision(
         self,
@@ -395,7 +517,10 @@ class LLMProvider:
         kwargs: dict[str, Any] = {}
         handler = self.get_langfuse_handler(target_trace_id)
         if handler:
-            metadata = dict(trace_metadata or {})
+            metadata = {
+                k: (redact_secrets(v) if isinstance(v, str) else v)
+                for k, v in (trace_metadata or {}).items()
+            }
             metadata["vision"] = True
             if node_name:
                 metadata["node_name"] = node_name
@@ -408,8 +533,61 @@ class LLMProvider:
                 "metadata": metadata,
             }
 
-        response = await self._vision_llm.ainvoke(messages, **kwargs)
-        return str(response.content)
+        if self._call_count >= self._settings.max_llm_calls_per_run:
+            raise LLMBudgetExceededError(
+                f"Global LLM call limit reached ({self._call_count}/{self._settings.max_llm_calls_per_run}). "
+                "Halting run to prevent runaway API spend."
+            )
+        self._call_count += 1
+
+        max_retries = max(1, self._settings.max_retries)
+        last_exception: Exception | None = None
+
+        async with self._semaphore:
+            for attempt in range(1, max_retries + 1):
+                try:
+                    response = await self._vision_llm.ainvoke(messages, **kwargs)
+                    return str(response.content)
+                except Exception as e:
+                    last_exception = e
+                    if _is_credit_exhaustion_error(e):
+                        logger.critical(
+                            "[CRITICAL:LLMProvider][trace_id=%s] Credit exhaustion detected in vision LLM: %s. "
+                            "Immediate fail-fast triggered to prevent retries.",
+                            target_trace_id or "none",
+                            e,
+                        )
+                        raise InsufficientCreditsError(
+                            f"OpenRouter API key has insufficient credits: {e}"
+                        ) from e
+
+                    if _is_retryable_error(e) and attempt < max_retries:
+                        backoff = (2 ** attempt) + 0.5
+                        logger.warning(
+                            "[WARN:LLMProvider][trace_id=%s] Vision LLM transient error on attempt %d/%d: %s. Backing off for %.1fs...",
+                            target_trace_id or "none",
+                            attempt,
+                            max_retries,
+                            e,
+                            backoff,
+                        )
+                        await asyncio.sleep(backoff)
+                        continue
+
+                    logger.error(
+                        "[ERROR:LLMProvider][trace_id=%s] Vision LLM ainvoke failed on attempt %d/%d for node '%s': %s",
+                        target_trace_id or "none",
+                        attempt,
+                        max_retries,
+                        node_name or "(default)",
+                        e,
+                        exc_info=True,
+                    )
+                    raise
+
+        if last_exception:
+            raise last_exception
+        raise RuntimeError("Unexpected state: Vision LLM invocation exited without response or exception.")
 
     def invoke_sync(
         self,
@@ -444,7 +622,10 @@ class LLMProvider:
         kwargs: dict[str, Any] = {}
         handler = self.get_langfuse_handler(target_trace_id)
         if handler:
-            metadata = dict(trace_metadata or {})
+            metadata = {
+                k: (redact_secrets(v) if isinstance(v, str) else v)
+                for k, v in (trace_metadata or {}).items()
+            }
             if target_trace_id:
                 metadata["workflow_trace_id"] = target_trace_id
             kwargs["config"] = {
@@ -453,8 +634,33 @@ class LLMProvider:
                 "metadata": metadata,
             }
 
-        response = self._llm.invoke(messages, **kwargs)
-        return str(response.content)
+        if self._call_count >= self._settings.max_llm_calls_per_run:
+            raise LLMBudgetExceededError(
+                f"Global LLM call limit reached ({self._call_count}/{self._settings.max_llm_calls_per_run}). "
+                "Halting run to prevent runaway API spend."
+            )
+        self._call_count += 1
+
+        try:
+            response = self._llm.invoke(messages, **kwargs)
+            return str(response.content)
+        except Exception as e:
+            if _is_credit_exhaustion_error(e):
+                logger.critical(
+                    "[CRITICAL:LLMProvider][trace_id=%s] Credit exhaustion detected in sync invoke: %s.",
+                    target_trace_id or "none",
+                    e,
+                )
+                raise InsufficientCreditsError(
+                    f"OpenRouter API key has insufficient credits: {e}"
+                ) from e
+            logger.error(
+                "[ERROR:LLMProvider][trace_id=%s] Sync LLM invoke failed: %s",
+                target_trace_id or "none",
+                e,
+                exc_info=True,
+            )
+            raise
 
     def flush_langfuse(self) -> None:
         """Flush pending Langfuse events from client and all active trace handlers."""

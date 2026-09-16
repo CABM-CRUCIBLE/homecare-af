@@ -162,5 +162,10 @@ def launch_web_ui(settings: Any) -> None:
         )
 
     port = settings.web_ui_port if hasattr(settings, "web_ui_port") else 7860
-    logger.info("Launching Gradio Web UI on port %d...", port)
-    demo.launch(server_port=port, share=False)
+    auth = None
+    if getattr(settings, "gradio_auth_user", "") and getattr(settings, "gradio_auth_password", ""):
+        auth = (settings.gradio_auth_user, settings.gradio_auth_password)
+        logger.info("Gradio Web UI basic authentication enabled for user '%s'", settings.gradio_auth_user)
+
+    logger.info("Launching Gradio Web UI on 127.0.0.1:%d...", port)
+    demo.launch(server_name="127.0.0.1", server_port=port, share=False, auth=auth)

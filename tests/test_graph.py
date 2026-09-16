@@ -89,3 +89,24 @@ def test_build_graph():
     mock_llm = MagicMock()
     compiled_graph = build_graph(settings, mock_llm)
     assert compiled_graph is not None
+
+
+def test_routing_logs_with_trace_id(caplog):
+    import logging
+    caplog.set_level(logging.INFO)
+
+    trace_id = "1234567890abcdef1234567890abcdef"
+    state: AgentState = {
+        "trace_id": trace_id,
+        "clarification_complete": False,
+        "architecture_approved": True,
+    }
+
+    dec1 = needs_clarification(state)
+    assert dec1 == "ask_clarifications"
+    assert f"[ROUTE:needs_clarification][trace_id={trace_id}]" in caplog.text
+
+    dec2 = arch_approved(state)
+    assert dec2 == "create_branch"
+    assert f"[ROUTE:arch_approved][trace_id={trace_id}]" in caplog.text
+

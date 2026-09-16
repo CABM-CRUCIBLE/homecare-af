@@ -183,6 +183,18 @@ class Settings(BaseSettings):
         default=3,
         description="Maximum code review → fix → re-review cycles.",
     )
+    max_arch_iterations: int = Field(
+        default=3,
+        description="Maximum architecture review → revision cycles to prevent runaway spending.",
+    )
+    max_clarification_iterations: int = Field(
+        default=2,
+        description="Maximum clarification Q&A rounds before proceeding to analysis.",
+    )
+    max_llm_calls_per_run: int = Field(
+        default=60,
+        description="Global safety budget ceiling for total LLM calls per workflow run.",
+    )
 
     # ─── UI ──────────────────────────────────────────────────────────────
     clarification_mode: ClarificationMode = Field(
@@ -193,11 +205,23 @@ class Settings(BaseSettings):
         default=7860,
         description="Port for the Gradio web UI.",
     )
+    gradio_auth_user: str = Field(
+        default="",
+        description="Optional basic auth username for the Gradio Web UI.",
+    )
+    gradio_auth_password: str = Field(
+        default="",
+        description="Optional basic auth password for the Gradio Web UI.",
+    )
 
     # ─── Logging ─────────────────────────────────────────────────────────
     log_level: str = Field(
         default="INFO",
         description="Logging level: DEBUG, INFO, WARNING, ERROR.",
+    )
+    log_file: str = Field(
+        default="logs/homecare-agent.log",
+        description="Path to local log file for persistent debug traces. Set empty to disable.",
     )
 
     # ─── Paths ───────────────────────────────────────────────────────────

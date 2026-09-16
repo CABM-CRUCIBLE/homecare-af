@@ -89,8 +89,16 @@ async def analyze_wireframe(
         {"type": "image_url", "image_url": {"url": data_uri}},
     ]
     
-    response = await llm_provider.ainvoke_vision([HumanMessage(content=content)])
-    return {
-        "metadata": metadata,
-        "analysis": response.content if hasattr(response, "content") else str(response),
-    }
+    try:
+        response = await llm_provider.ainvoke_vision([HumanMessage(content=content)])
+        return {
+            "metadata": metadata,
+            "analysis": response.content if hasattr(response, "content") else str(response),
+        }
+    except Exception as e:
+        logger.error("Failed to analyze wireframe %s: %s", image_path, e, exc_info=True)
+        return {
+            "metadata": metadata,
+            "error": str(e),
+            "notes": f"Vision analysis failed: {e}",
+        }

@@ -79,7 +79,9 @@ async def intake_feature(state: AgentState, settings: Settings, llm: LLMProvider
     Returns:
         State updates with extracted requirements and clarification questions.
     """
-    logger.info("Starting feature intake for: %s", state.get("feature_name", "Unknown"))
+    trace_id = state.get("trace_id", "no-trace")
+    feature_name = state.get("feature_name", "Unknown")
+    logger.info("[START:intake_feature][trace_id=%s] Starting feature intake for '%s'", trace_id, feature_name)
 
     updates: dict[str, Any] = {
         "current_step": "intake_feature",
@@ -92,7 +94,11 @@ async def intake_feature(state: AgentState, settings: Settings, llm: LLMProvider
     all_wireframes = wireframe_paths + wireframe_urls
 
     if all_wireframes:
-        logger.info("Analyzing %d wireframe(s) via vision LLM...", len(all_wireframes))
+        logger.info(
+            "[intake_feature][trace_id=%s] Analyzing %d wireframe(s) via vision LLM...",
+            trace_id,
+            len(all_wireframes),
+        )
         try:
             wireframe_analysis = await llm.ainvoke_with_vision(
                 prompt=WIREFRAME_ANALYSIS_PROMPT,
@@ -102,15 +108,25 @@ async def intake_feature(state: AgentState, settings: Settings, llm: LLMProvider
                 state_overrides=state,
                 trace_name="intake_wireframe_analysis",
             )
-            logger.info("Wireframe analysis complete (%d chars).", len(wireframe_analysis))
-        except Exception:
-            logger.exception("Wireframe analysis failed; continuing without it.")
+            logger.info(
+                "[intake_feature][trace_id=%s] Wireframe analysis completed successfully (%d chars generated)",
+                trace_id,
+                len(wireframe_analysis),
+            )
+        except Exception as e:
+            logger.error(
+                "[ERROR:intake_feature][trace_id=%s] Wireframe analysis failed for '%s': %s",
+                trace_id,
+                feature_name,
+                e,
+                exc_info=True,
+            )
 
     # Step 2: Parse feature description into requirements
     feature_description = state.get("feature_description", "")
     intake_prompt = f"""Analyze this feature request for an enterprise healthcare platform:
 
-**Feature Name:** {state.get("feature_name", "")}
+**Feature Name:** {feature_name}
 
 **Description:**
 {feature_description}
@@ -122,18 +138,18 @@ Consider the healthcare enterprise context: HIPAA compliance, audit trails, RBAC
 """
 
     try:
+        logger.debug("[intake_feature][trace_id=%s] Requesting structured requirements extraction from LLM...", trace_id)
         response = await llm.ainvoke(
             prompt=intake_prompt,
             system_prompt=INTAKE_SYSTEM_PROMPT,
             node_name="intake_feature",
             state_overrides=state,
             trace_name="intake_requirements_extraction",
-            trace_metadata={"feature_name": state.get("feature_name", "")},
+            trace_metadata={"feature_name": feature_name, "trace_id": trace_id},
         )
 
         # Parse structured response
         import json
-        # Try to extract JSON from the response
         json_start = response.find("{")
         json_end = response.rfind("}") + 1
         if json_start != -1 and json_end > json_start:
@@ -144,10 +160,14 @@ Consider the healthcare enterprise context: HIPAA compliance, audit trails, RBAC
             updates["clarification_questions"] = questions
             if questions:
                 updates["clarification_complete"] = False
-                logger.info("Identified %d clarification question(s).", len(questions))
+                logger.info(
+                    "[intake_feature][trace_id=%s] Identified %d clarification question(s); routing to ask_clarifications",
+                    trace_id,
+                    len(questions),
+                )
             else:
                 updates["clarification_complete"] = True
-                logger.info("No clarification needed; proceeding to analysis.")
+                logger.info("[intake_feature][trace_id=%s] No clarifications needed; proceeding directly to analysis", trace_id)
 
             updates["codebase_analysis"] = {
                 "functional_requirements": parsed.get("functional_requirements", []),
@@ -159,14 +179,30 @@ Consider the healthcare enterprise context: HIPAA compliance, audit trails, RBAC
                 "compliance_implications": parsed.get("compliance_implications", []),
                 "wireframe_analysis": wireframe_analysis,
             }
+            logger.info(
+                "[COMPLETED:intake_feature][trace_id=%s] Extracted %d FRs, %d NFRs, %d constraints",
+                trace_id,
+                len(parsed.get("functional_requirements", [])),
+                len(parsed.get("non_functional_requirements", [])),
+                len(parsed.get("constraints", [])),
+            )
         else:
-            logger.warning("Could not parse structured JSON from intake response.")
+            logger.warning(
+                "[WARN:intake_feature][trace_id=%s] Could not locate valid JSON in LLM response; fallback to raw text",
+                trace_id,
+            )
             updates["clarification_complete"] = True
             updates["codebase_analysis"] = {"raw_analysis": response}
 
-    except Exception:
-        logger.exception("Feature intake analysis failed.")
-        updates["errors"] = [{"step": "intake_feature", "message": "Intake analysis failed"}]
+    except Exception as e:
+        logger.error(
+            "[ERROR:intake_feature][trace_id=%s] Feature intake analysis failed for '%s': %s",
+            trace_id,
+            feature_name,
+            e,
+            exc_info=True,
+        )
+        updates["errors"] = [{"step": "intake_feature", "trace_id": trace_id, "message": f"Intake analysis failed: {e}"}]
         updates["clarification_complete"] = True
 
     updates["completed_steps"] = ["intake_feature"]

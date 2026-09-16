@@ -23,6 +23,8 @@ import typer
 from rich.console import Console
 from rich.logging import RichHandler
 
+from homecare_agent.security.redaction import SecretMaskingFilter
+
 app = typer.Typer(
     name="homecare-agent",
     help="HomeCare Agentic Code Generation Framework — automated SDLC powered by LangGraph",
@@ -31,14 +33,34 @@ app = typer.Typer(
 console = Console()
 
 
-def _setup_logging(level: str = "INFO") -> None:
-    """Configure structured logging with Rich handler."""
+def _setup_logging(level: str = "INFO", log_file: str = "") -> None:
+    """Configure structured logging with Rich console handler, file handler, and secret masking."""
+    masking_filter = SecretMaskingFilter()
+    console_handler = RichHandler(rich_tracebacks=True, show_path=False)
+    console_handler.addFilter(masking_filter)
+    handlers: list[logging.Handler] = [console_handler]
+
+    if log_file:
+        log_path = Path(log_file)
+        try:
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            file_handler = logging.FileHandler(str(log_path), encoding="utf-8")
+            file_handler.setFormatter(
+                logging.Formatter("[%(asctime)s] [%(levelname)s] [%(name)s] %(message)s")
+            )
+            file_handler.addFilter(masking_filter)
+            handlers.append(file_handler)
+        except Exception as e:
+            console.print(f"[yellow]Warning: Could not create log file at {log_path}: {e}[/yellow]")
+
     logging.basicConfig(
         level=getattr(logging, level.upper(), logging.INFO),
         format="%(message)s",
         datefmt="[%X]",
-        handlers=[RichHandler(rich_tracebacks=True, show_path=False)],
+        handlers=handlers,
+        force=True,
     )
+    logging.getLogger().addFilter(masking_filter)
 
 
 @app.command()
@@ -53,15 +75,12 @@ def run(
     model_review: str = typer.Option("", "--model-review", help="Model for Architecture and PR Code Reviews"),
     interactive: bool = typer.Option(True, "--interactive/--no-interactive", help="Interactive mode"),
     log_level: str = typer.Option("INFO", "--log-level", "-l", help="Logging level"),
+    log_file: str = typer.Option("", "--log-file", help="Path to log file (defaults to logs/homecare-agent.log)"),
 ) -> None:
     """Run the full agentic pipeline from feature request to PR."""
-    _setup_logging(log_level)
+    from homecare_agent.config import get_settings
     from homecare_agent.ui.cli import display_banner, prompt_feature_request, prompt_model_selection
 
-    display_banner()
-
-    # Load settings
-    from homecare_agent.config import get_settings
     try:
         overrides = {}
         if repo_path:
@@ -74,11 +93,16 @@ def run(
             overrides["model_code"] = model_code
         if model_review:
             overrides["model_review"] = model_review
+        if log_file:
+            overrides["log_file"] = log_file
         settings = get_settings(**overrides)
     except Exception as e:
         console.print(f"[red]Configuration error: {e}[/red]")
         console.print("[dim]Create a .env file from .env.example and fill in required values.[/dim]")
         raise typer.Exit(1)
+
+    _setup_logging(log_level or settings.log_level, settings.log_file)
+    display_banner()
 
     # Prompt for model if not configured
     if not settings.openrouter_model:
@@ -190,16 +214,16 @@ async def _run_pipeline(graph: object, initial_state: dict, trace_id: str = "", 
 @app.command()
 def web(
     port: int = typer.Option(7860, "--port", "-p", help="Web UI port"),
-    log_level: str = typer.Option("INFO", "--log-level", "-l", help="Logging level"),
+    log_level: str = typer.Option("", "--log-level", "-l", help="Logging level"),
 ) -> None:
     """Launch the Gradio web interface."""
-    _setup_logging(log_level)
-    from homecare_agent.ui.cli import display_banner
-    display_banner()
-
     from homecare_agent.config import get_settings
     settings = get_settings()
     settings.web_ui_port = port  # type: ignore[assignment]
+    _setup_logging(log_level or settings.log_level, settings.log_file)
+
+    from homecare_agent.ui.cli import display_banner
+    display_banner()
 
     from homecare_agent.ui.web import launch_web_ui
     launch_web_ui(settings)
@@ -210,18 +234,18 @@ def generate(
     feature_name: str = typer.Option(..., "--name", "-n", help="Feature name"),
     feature_description: str = typer.Option(..., "--desc", "-d", help="Feature description"),
     output_dir: str = typer.Option("output", "--output", "-o", help="Output directory"),
-    log_level: str = typer.Option("INFO", "--log-level", "-l", help="Logging level"),
+    log_level: str = typer.Option("", "--log-level", "-l", help="Logging level"),
 ) -> None:
     """Generate architecture documents only (Strategy, Tactical, ADRs)."""
-    _setup_logging(log_level)
+    from homecare_agent.config import get_settings
+    settings = get_settings(output_dir=output_dir)
+    _setup_logging(log_level or settings.log_level, settings.log_file)
+
     from homecare_agent.ui.cli import display_banner
     display_banner()
 
     console.print(f"[cyan]Generating architecture documents for: {feature_name}[/cyan]")
     console.print(f"[dim]Output: {output_dir}[/dim]")
-
-    from homecare_agent.config import get_settings
-    settings = get_settings(output_dir=output_dir)
 
     from homecare_agent.ui.cli import prompt_model_selection
     if not settings.openrouter_model:

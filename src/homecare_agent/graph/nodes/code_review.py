@@ -56,9 +56,16 @@ async def perform_code_review(state: AgentState, settings: Settings, llm: LLMPro
     Returns:
         State updates with review findings and whether changes are needed.
     """
-    logger.info("Performing code review...")
-
+    trace_id = state.get("trace_id", "no-trace")
+    feature_name = state.get("feature_name", "Unknown")
     generated_code = state.get("generated_code", {})
+    logger.info(
+        "[START:perform_code_review][trace_id=%s] Performing code review for '%s' (%d file(s))...",
+        trace_id,
+        feature_name,
+        len(generated_code),
+    )
+
     strategy = state.get("strategy_document", "")
     tactical = state.get("tactical_plan", "")
 
@@ -71,7 +78,7 @@ async def perform_code_review(state: AgentState, settings: Settings, llm: LLMPro
 
     review_prompt = f"""Perform a critical code review of the following generated code.
 
-**Feature:** {state.get("feature_name")}
+**Feature:** {feature_name}
 **Branch:** {state.get("branch_name", "")}
 **Files Changed:** {len(generated_code)}
 
@@ -89,6 +96,7 @@ Generate the complete review document with scorecard and findings.
 """
 
     try:
+        logger.debug("[perform_code_review][trace_id=%s] Invoking LLM for critical code review...", trace_id)
         response = await llm.ainvoke(
             prompt=review_prompt,
             system_prompt=CODE_REVIEWER_PERSONA,
@@ -96,8 +104,9 @@ Generate the complete review document with scorecard and findings.
             state_overrides=state,
             trace_name="code_review",
             trace_metadata={
-                "feature_name": state.get("feature_name", ""),
+                "feature_name": feature_name,
                 "files_count": len(generated_code),
+                "trace_id": trace_id,
             },
         )
 
@@ -109,6 +118,15 @@ Generate the complete review document with scorecard and findings.
 
         review_iteration = state.get("review_iteration", 0) + 1
 
+        logger.info(
+            "[COMPLETED:perform_code_review][trace_id=%s] Code review finished for '%s' (iteration %d, changes_needed=%s, %d chars)",
+            trace_id,
+            feature_name,
+            review_iteration,
+            changes_needed,
+            len(response),
+        )
+
         return {
             "code_review_findings": [{"iteration": review_iteration, "review": response}],
             "review_changes_needed": changes_needed,
@@ -117,11 +135,17 @@ Generate the complete review document with scorecard and findings.
             "completed_steps": ["code_review"],
         }
 
-    except Exception:
-        logger.exception("Code review failed.")
+    except Exception as e:
+        logger.error(
+            "[ERROR:perform_code_review][trace_id=%s] Code review failed for '%s': %s",
+            trace_id,
+            feature_name,
+            e,
+            exc_info=True,
+        )
         return {
             "review_changes_needed": False,
-            "errors": [{"step": "code_review", "message": "Code review failed"}],
+            "errors": [{"step": "code_review", "trace_id": trace_id, "message": f"Code review failed: {e}"}],
             "current_step": "code_review",
             "completed_steps": ["code_review"],
         }
@@ -136,7 +160,15 @@ async def apply_review_fixes(state: AgentState, settings: Settings, llm: LLMProv
     Returns:
         State updates with corrected generated code.
     """
-    logger.info("Applying code review fixes (iteration %d)...", state.get("review_iteration", 0))
+    trace_id = state.get("trace_id", "no-trace")
+    feature_name = state.get("feature_name", "Unknown")
+    iteration = state.get("review_iteration", 0)
+    logger.info(
+        "[START:apply_review_fixes][trace_id=%s] Applying code review fixes for '%s' (iteration %d)...",
+        trace_id,
+        feature_name,
+        iteration,
+    )
 
     findings = state.get("code_review_findings", [])
     generated_code = state.get("generated_code", {})
@@ -163,13 +195,14 @@ Fix ALL blocking and critical issues. Provide COMPLETE file contents.
 """
 
     try:
+        logger.debug("[apply_review_fixes][trace_id=%s] Invoking LLM to generate fixes for iteration %d...", trace_id, iteration)
         response = await llm.ainvoke(
             prompt=fix_prompt,
             system_prompt=CODE_REVIEWER_PERSONA,
             node_name="apply_review_fixes",
             state_overrides=state,
             trace_name="apply_review_fixes",
-            trace_metadata={"iteration": state.get("review_iteration", 0)},
+            trace_metadata={"iteration": iteration, "feature_name": feature_name, "trace_id": trace_id},
         )
 
         # Parse fixed files
@@ -184,7 +217,12 @@ Fix ALL blocking and critical issues. Provide COMPLETE file contents.
             if file_path and content:
                 fixed_code[file_path] = content
 
-        logger.info("Applied fixes to %d file(s).", len(fixed_code))
+        logger.info(
+            "[COMPLETED:apply_review_fixes][trace_id=%s] Applied fixes to %d file(s) for '%s'",
+            trace_id,
+            len(fixed_code),
+            feature_name,
+        )
 
         return {
             "generated_code": fixed_code,
@@ -192,10 +230,16 @@ Fix ALL blocking and critical issues. Provide COMPLETE file contents.
             "completed_steps": ["apply_review_fixes"],
         }
 
-    except Exception:
-        logger.exception("Applying review fixes failed.")
+    except Exception as e:
+        logger.error(
+            "[ERROR:apply_review_fixes][trace_id=%s] Applying review fixes failed for '%s': %s",
+            trace_id,
+            feature_name,
+            e,
+            exc_info=True,
+        )
         return {
-            "errors": [{"step": "apply_review_fixes", "message": "Fix application failed"}],
+            "errors": [{"step": "apply_review_fixes", "trace_id": trace_id, "message": f"Fix application failed: {e}"}],
             "current_step": "apply_fixes",
             "completed_steps": ["apply_review_fixes"],
         }

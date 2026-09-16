@@ -192,8 +192,8 @@ def analyze_frontend_routes(frontend_path: str | Path) -> list[dict[str, Any]]:
                 "route": route_path,
                 "file": str(rel),
             })
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Failed parsing Next.js route for %s: %s", page, e)
 
     return routes
 
