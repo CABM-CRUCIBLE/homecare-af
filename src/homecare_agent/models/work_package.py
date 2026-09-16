@@ -1,3 +1,6 @@
+# Author: C A B M
+# Date: 2026-09-17
+
 """Work package data models.
 
 Defines the schema for work packages — self-contained, parallelisable

@@ -1,3 +1,6 @@
+# Author: C A B M
+# Date: 2026-09-17
+
 """LangGraph state definition for the HomeCare Agentic Framework.
 
 The AgentState is a TypedDict that flows through the entire LangGraph
@@ -49,6 +52,7 @@ class AgentState(TypedDict, total=False):
     """
 
     # ─── Input ───────────────────────────────────────────────────────────
+    trace_id: str
     feature_name: str
     feature_description: str
     wireframe_paths: list[str]

@@ -1,3 +1,6 @@
+# Author: C A B M
+# Date: 2026-09-17
+
 """Tools package for the HomeCare Agentic Framework."""
 
 from homecare_agent.tools.build_tools import (

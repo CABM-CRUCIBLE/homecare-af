@@ -1,3 +1,6 @@
+# Author: C A B M
+# Date: 2026-09-17
+
 """Architecture review node.
 
 Performs a deep pre-implementation review of the Strategy, Tactical Plan,

@@ -1,3 +1,6 @@
+# Author: C A B M
+# Date: 2026-09-17
+
 """Document template loader and renderer.
 
 Loads markdown templates for Architecture Strategy, Tactical Plan, ADRs,

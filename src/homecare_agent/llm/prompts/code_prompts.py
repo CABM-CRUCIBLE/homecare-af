@@ -1,3 +1,6 @@
+# Author: C A B M
+# Date: 2026-09-17
+
 """Prompts for work package generation and code implementation."""
 
 WORK_PACKAGE_GENERATION_PROMPT = """\

@@ -1,3 +1,6 @@
+# Author: C A B M
+# Date: 2026-09-17
+
 """Rich CLI interface for the HomeCare Agentic Framework.
 
 Provides an interactive terminal interface with progress tracking,

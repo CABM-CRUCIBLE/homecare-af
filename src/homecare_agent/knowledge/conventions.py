@@ -1,3 +1,6 @@
+# Author: C A B M
+# Date: 2026-09-17
+
 """Enterprise coding conventions and standards.
 
 Codifies the enterprise coding standards from AI_Instructions.md

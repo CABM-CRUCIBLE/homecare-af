@@ -1,3 +1,6 @@
+# Author: C A B M
+# Date: 2026-09-17
+
 """CLI entry point for the HomeCare Agentic Framework.
 
 Provides commands:
@@ -101,8 +104,14 @@ def run(
     from homecare_agent.graph.main_graph import compile_graph
     graph = compile_graph(settings, llm)
 
-    # Prepare initial state
+    # Generate unified workflow trace ID (32-character hex)
+    import uuid
+    trace_id = uuid.uuid4().hex
+    llm.set_workflow_trace(trace_id, trace_name=feature_name)
+
+    # Prepare initial state with trace_id
     initial_state = {
+        "trace_id": trace_id,
         "feature_name": feature_name,
         "feature_description": feature_description,
         "wireframe_paths": [w for w in wireframes if not w.startswith("http")],
@@ -117,10 +126,14 @@ def run(
     }
 
     # Run the pipeline
-    console.print(f"\n[bold cyan]🚀 Starting pipeline for: {feature_name}[/bold cyan]\n")
+    console.print(f"\n[bold cyan]🚀 Starting pipeline for: {feature_name}[/bold cyan]")
+    console.print(f"[dim]Trace ID: {trace_id}[/dim]")
+    if settings.langfuse_enabled:
+        project_id = getattr(settings, "langfuse_init_project_id", "homecare")
+        console.print(f"[dim]Langfuse Trace: {settings.langfuse_host.rstrip('/')}/project/{project_id}/traces/{trace_id}[/dim]\n")
 
     try:
-        result = asyncio.run(_run_pipeline(graph, initial_state))
+        result = asyncio.run(_run_pipeline(graph, initial_state, trace_id=trace_id, llm=llm))
 
         from homecare_agent.ui.cli import display_completion_summary
         display_completion_summary(result)
@@ -134,20 +147,32 @@ def run(
         llm.flush_langfuse()
 
 
-async def _run_pipeline(graph: object, initial_state: dict) -> dict:
-    """Run the compiled graph pipeline.
+async def _run_pipeline(graph: object, initial_state: dict, trace_id: str = "", llm: Any = None) -> dict:
+    """Run the compiled graph pipeline with optional Langfuse tracing callback.
 
     Args:
         graph: Compiled LangGraph runnable.
         initial_state: Initial state dictionary.
+        trace_id: Unified workflow trace ID.
+        llm: LLMProvider instance with callback handler.
 
     Returns:
         Final state dictionary.
     """
     from homecare_agent.ui.cli import display_step_progress
 
+    config: dict[str, Any] = {}
+    if llm and trace_id:
+        handler = llm.get_langfuse_handler(trace_id)
+        if handler:
+            config["callbacks"] = [handler]
+
     final_state = {}
-    async for event in graph.astream(initial_state):  # type: ignore[union-attr]
+    stream_kwargs: dict[str, Any] = {}
+    if config:
+        stream_kwargs["config"] = config
+
+    async for event in graph.astream(initial_state, **stream_kwargs):  # type: ignore[union-attr]
         for node_name, state_update in event.items():
             step = state_update.get("current_step", node_name)
             display_step_progress(step, "completed")
@@ -205,11 +230,17 @@ def generate(
     from homecare_agent.llm.provider import LLMProvider
     llm = LLMProvider(settings)
 
+    import uuid
+    trace_id = uuid.uuid4().hex
+    llm.set_workflow_trace(trace_id, trace_name=f"generate_{feature_name}")
+    console.print(f"[dim]Trace ID: {trace_id}[/dim]")
+
     # Run only the architecture generation nodes
     async def _generate() -> None:
         from homecare_agent.graph.nodes.architect import generate_strategy, generate_tactical_plan, generate_adrs
 
         state = {
+            "trace_id": trace_id,
             "feature_name": feature_name,
             "feature_description": feature_description,
             "repo_path": settings.repo_path,

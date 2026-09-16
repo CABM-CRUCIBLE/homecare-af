@@ -1,3 +1,6 @@
+# Author: C A B M
+# Date: 2026-09-17
+
 """Feature intake node — entry point for the agentic pipeline.
 
 Receives the feature request, analyzes wireframes via vision LLM,
@@ -95,6 +98,8 @@ async def intake_feature(state: AgentState, settings: Settings, llm: LLMProvider
                 prompt=WIREFRAME_ANALYSIS_PROMPT,
                 image_urls=all_wireframes,
                 system_prompt="You are a UI/UX analyst for enterprise healthcare applications.",
+                node_name="intake_feature",
+                state_overrides=state,
                 trace_name="intake_wireframe_analysis",
             )
             logger.info("Wireframe analysis complete (%d chars).", len(wireframe_analysis))

@@ -1,3 +1,6 @@
+# Author: C A B M
+# Date: 2026-09-17
+
 """Unit tests for multi-tier and per-node LLM model routing."""
 
 from unittest.mock import MagicMock
@@ -10,6 +13,7 @@ from homecare_agent.llm.provider import LLMProvider
 
 def test_get_model_for_node_defaults():
     settings = Settings(
+        _env_file=None,
         openrouter_api_key="test-key",
         openrouter_model="anthropic/claude-sonnet-4",
     )

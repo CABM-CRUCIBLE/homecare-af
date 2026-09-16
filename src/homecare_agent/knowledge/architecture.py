@@ -1,3 +1,6 @@
+# Author: C A B M
+# Date: 2026-09-17
+
 """Embedded architecture patterns knowledge base.
 
 Provides structured knowledge about Clean Architecture patterns,

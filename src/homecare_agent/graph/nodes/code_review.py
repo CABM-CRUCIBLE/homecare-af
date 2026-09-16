@@ -1,3 +1,6 @@
+# Author: C A B M
+# Date: 2026-09-17
+
 """Code review node.
 
 Performs post-implementation code review of generated code against

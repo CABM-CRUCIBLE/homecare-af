@@ -1,3 +1,6 @@
+# Author: C A B M
+# Date: 2026-09-17
+
 """Prompt templates package for the HomeCare Agentic Framework."""
 
 from homecare_agent.llm.prompts.analysis_prompts import (

@@ -1,3 +1,6 @@
+# Author: C A B M
+# Date: 2026-09-17
+
 """Image processing tools for UI wireframe and screenshot analysis."""
 
 from __future__ import annotations

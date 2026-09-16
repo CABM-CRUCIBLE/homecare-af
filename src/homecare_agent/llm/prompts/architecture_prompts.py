@@ -1,3 +1,6 @@
+# Author: C A B M
+# Date: 2026-09-17
+
 """Prompts for generating Architecture Strategy, Tactical Plans, and ADRs."""
 
 STRATEGY_GENERATION_PROMPT = """\

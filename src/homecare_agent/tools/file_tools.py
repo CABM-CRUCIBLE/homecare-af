@@ -1,3 +1,6 @@
+# Author: C A B M
+# Date: 2026-09-17
+
 """File operations tool for reading, writing, tree scanning, and code extraction."""
 
 from __future__ import annotations

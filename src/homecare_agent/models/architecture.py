@@ -1,3 +1,6 @@
+# Author: C A B M
+# Date: 2026-09-17
+
 """Architecture document data models.
 
 Defines schemas for Strategy, Tactical Plan, ADR, and related architecture

@@ -1,3 +1,6 @@
+# Author: C A B M
+# Date: 2026-09-17
+
 """Local git operations tool using GitPython.
 
 Handles branch management, staging, committing, pushing, and diff inspection.

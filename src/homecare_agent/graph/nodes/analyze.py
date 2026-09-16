@@ -1,3 +1,6 @@
+# Author: C A B M
+# Date: 2026-09-17
+
 """Codebase analysis node.
 
 Deeply scans the target repository to understand its architecture,

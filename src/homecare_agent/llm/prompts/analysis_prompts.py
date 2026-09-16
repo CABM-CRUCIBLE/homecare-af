@@ -1,3 +1,6 @@
+# Author: C A B M
+# Date: 2026-09-17
+
 """Prompts for codebase and gap analysis."""
 
 CODEBASE_ANALYSIS_PROMPT = """\

@@ -1,3 +1,6 @@
+# Author: C A B M
+# Date: 2026-09-17
+
 """Agentic prompt generation node.
 
 Generates self-contained, parallelisable work package prompts from the

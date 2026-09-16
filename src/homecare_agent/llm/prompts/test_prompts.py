@@ -1,3 +1,6 @@
+# Author: C A B M
+# Date: 2026-09-17
+
 """Prompts for generating unit tests, Playwright E2E tests, and k6 load tests."""
 
 UNIT_TEST_PROMPT = """\

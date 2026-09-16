@@ -1,3 +1,6 @@
+# Author: C A B M
+# Date: 2026-09-17
+
 """Configuration and environment management for the HomeCare Agentic Framework.
 
 Provides validated configuration via pydantic-settings, supporting both
@@ -114,6 +117,18 @@ class Settings(BaseSettings):
         default=False,
         description="Enable Langfuse tracing. Auto-enabled when keys are provided.",
     )
+    langfuse_init_project_id: str = Field(
+        default="homecare",
+        description="Langfuse initial project ID.",
+    )
+    langfuse_init_user_email: str = Field(
+        default="admin@homecare.local",
+        description="Langfuse initial admin user email.",
+    )
+    langfuse_init_user_password: str = Field(
+        default="HomeCareAdmin123!",
+        description="Langfuse initial admin user password.",
+    )
 
     # ─── GitHub ──────────────────────────────────────────────────────────
     github_token: str = Field(
@@ -205,13 +220,16 @@ class Settings(BaseSettings):
 
     @field_validator("langfuse_enabled", mode="before")
     @classmethod
-    def auto_enable_langfuse(cls, v: bool, info: object) -> bool:
-        """Auto-enable Langfuse when both keys are provided."""
-        # pydantic-settings v2 passes ValidationInfo
-        data = getattr(info, "data", {})
-        if not v and data.get("langfuse_public_key") and data.get("langfuse_secret_key"):
+    def auto_enable_langfuse(cls, v: Any, info: object) -> bool:
+        """Auto-enable Langfuse when both keys are provided and not explicitly disabled."""
+        if v in (False, "false", "False", "0", "no"):
+            return False
+        if v in (True, "true", "True", "1", "yes"):
             return True
-        return v
+        data = getattr(info, "data", {})
+        if data.get("langfuse_public_key") and data.get("langfuse_secret_key"):
+            return True
+        return False
 
     @property
     def effective_vision_model(self) -> str:

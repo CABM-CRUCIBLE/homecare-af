@@ -1,3 +1,6 @@
+# Author: C A B M
+# Date: 2026-09-17
+
 """GitHub API tool using PyGithub.
 
 Provides operations to interact with GitHub repositories:

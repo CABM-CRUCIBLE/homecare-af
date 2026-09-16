@@ -1,3 +1,6 @@
+# Author: C A B M
+# Date: 2026-09-17
+
 """Feature request data models.
 
 Defines the structured schema for feature requests that flow through the

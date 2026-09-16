@@ -1,3 +1,6 @@
+# Author: C A B M
+# Date: 2026-09-17
+
 """Build and test tools for .NET and Node.js projects.
 
 Provides subprocess wrappers for building and testing the backend (.NET)

@@ -1,3 +1,6 @@
+# Author: C A B M
+# Date: 2026-09-17
+
 """Mermaid diagram generation and syntax validation tools."""
 
 from __future__ import annotations

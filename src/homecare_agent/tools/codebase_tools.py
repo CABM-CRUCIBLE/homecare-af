@@ -1,3 +1,6 @@
+# Author: C A B M
+# Date: 2026-09-17
+
 """Codebase analysis tools for inspecting Clean Architecture repositories.
 
 Provides utilities for:

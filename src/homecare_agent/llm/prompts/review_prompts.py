@@ -1,3 +1,6 @@
+# Author: C A B M
+# Date: 2026-09-17
+
 """Prompts for architecture review and code review."""
 
 ARCHITECTURE_REVIEW_PROMPT = """\

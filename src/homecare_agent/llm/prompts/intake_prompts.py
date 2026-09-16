@@ -1,3 +1,6 @@
+# Author: C A B M
+# Date: 2026-09-17
+
 """Prompts for feature intake and clarification loops."""
 
 FEATURE_ANALYSIS_PROMPT = """\

@@ -1,3 +1,6 @@
+# Author: C A B M
+# Date: 2026-09-17
+
 """Git operations node.
 
 Handles branch creation, staging, committing, pushing, and PR creation.

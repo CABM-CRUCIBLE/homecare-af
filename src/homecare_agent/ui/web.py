@@ -1,3 +1,6 @@
+# Author: C A B M
+# Date: 2026-09-17
+
 """Gradio Web UI for the HomeCare Agentic Framework.
 
 Provides a browser-based chat interface for feature requests,
@@ -143,7 +146,14 @@ def launch_web_ui(settings: Any) -> None:
             """Start the agentic pipeline."""
             if not name or not desc:
                 return "### ⚠️ Error\nPlease provide both a feature name and description."
-            return f"### ⏳ Pipeline Started\n**Feature:** {name}\n\nProcessing..."
+            import uuid
+            trace_id = uuid.uuid4().hex
+            trace_link = ""
+            if settings.langfuse_enabled:
+                project_id = getattr(settings, "langfuse_init_project_id", "homecare")
+                trace_url = f"{settings.langfuse_host.rstrip('/')}/project/{project_id}/traces/{trace_id}"
+                trace_link = f"\n\n🔗 **Langfuse Trace:** [{trace_id}]({trace_url})"
+            return f"### ⏳ Pipeline Started\n**Feature:** {name}\n**Trace ID:** `{trace_id}`{trace_link}\n\nProcessing..."
 
         submit_btn.click(
             fn=start_pipeline,

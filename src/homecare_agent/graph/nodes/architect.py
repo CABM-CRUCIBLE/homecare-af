@@ -1,3 +1,6 @@
+# Author: C A B M
+# Date: 2026-09-17
+
 """Architect node — generates Strategy, Tactical Plan, and ADR documents.
 
 This is the core architecture generation node that produces the complete

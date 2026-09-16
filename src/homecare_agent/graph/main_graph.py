@@ -1,3 +1,6 @@
+# Author: C A B M
+# Date: 2026-09-17
+
 """Main LangGraph workflow assembly.
 
 Compiles the full StateGraph with all nodes and conditional edges,
@@ -221,6 +224,8 @@ Output the revised Strategy document.
         response = await llm.ainvoke(
             prompt=revision_prompt,
             system_prompt="You are a Senior Solution Architect revising an architecture proposal based on review feedback.",
+            node_name="revise_architecture",
+            state_overrides=state,
             trace_name="revise_architecture",
         )
         return {
@@ -287,6 +292,8 @@ Format as markdown following a standard QA testing guide template.
         response = await llm.ainvoke(
             prompt=prompt,
             system_prompt="You are a QA Lead generating a manual testing guide.",
+            node_name="generate_manual_test_doc",
+            state_overrides=state,
             trace_name="generate_manual_test_doc",
         )
         return {"current_step": "generate_manual_test_doc", "completed_steps": ["generate_manual_test_doc"]}
