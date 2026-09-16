@@ -88,6 +88,21 @@ def launch_web_ui(settings: Any) -> None:
                                 value=getattr(settings, "model_review", "") or getattr(settings, "model_architecture", "") or "anthropic/claude-sonnet-4",
                                 allow_custom_value=True,
                             )
+                            with gr.Accordion("💻 Local LLM for Code Generation (Ollama / vLLM / LM Studio)", open=False):
+                                local_llm_toggle = gr.Checkbox(
+                                    label="Route Code Generation to Local LLM (Zero Token Cost)",
+                                    value=getattr(settings, "local_llm_enabled", False),
+                                )
+                                local_llm_url = gr.Textbox(
+                                    label="Local LLM Base URL",
+                                    value=getattr(settings, "local_llm_base_url", "http://localhost:11434/v1"),
+                                    placeholder="http://localhost:11434/v1",
+                                )
+                                local_llm_model = gr.Textbox(
+                                    label="Local Code Model Name",
+                                    value=getattr(settings, "local_llm_code_model", "qwen2.5-coder:32b"),
+                                    placeholder="e.g., qwen2.5-coder:32b, deepseek-coder:33b",
+                                )
                         wireframe_files = gr.File(
                             label="Wireframes / Screenshots",
                             file_count="multiple",
@@ -141,8 +156,64 @@ def launch_web_ui(settings: Any) -> None:
             with gr.Tab("🔍 Code Review"):
                 code_review_output = gr.Markdown("_Code review will appear here_")
 
+            # Tab 6: Resume Pipeline
+            with gr.Tab("🔄 Resume Pipeline"):
+                gr.Markdown(
+                    "### 🔄 Resume an Interrupted or Failed Pipeline Run\n"
+                    "Select a previous run from disk checkpoints and choose which step to resume from without starting over."
+                )
+                from homecare_agent.graph.checkpoint import (
+                    CheckpointManager,
+                    ORDERED_STEPS,
+                    get_step_number,
+                    resolve_next_step,
+                )
+                checkpoint_mgr = CheckpointManager()
+
+                def _get_cp_choices() -> list[tuple[str, str]]:
+                    cps = checkpoint_mgr.list_checkpoints()
+                    if not cps:
+                        return [("No saved checkpoints found", "")]
+                    return [
+                        (
+                            f"{cp['feature_name']} (Last: {cp['last_completed_step'] or 'Start'}) — {cp['trace_id'][:8]}",
+                            cp["trace_id"],
+                        )
+                        for cp in cps
+                    ]
+
+                step_choices = [f"Step {s['number']}: {s['name']}" for s in ORDERED_STEPS]
+
+                with gr.Row():
+                    with gr.Column(scale=2):
+                        resume_cp_dropdown = gr.Dropdown(
+                            label="Saved Checkpoint",
+                            choices=_get_cp_choices(),
+                            value=_get_cp_choices()[0][1] if _get_cp_choices() and _get_cp_choices()[0][1] else None,
+                        )
+                        resume_step_dropdown = gr.Dropdown(
+                            label="Resume From Step",
+                            choices=step_choices,
+                            value="Step 4: generate_strategy",
+                            help="Choose the step to start from. Prior completed steps will NOT be re-executed.",
+                        )
+                        with gr.Row():
+                            refresh_cps_btn = gr.Button("🔄 Refresh List")
+                            resume_run_btn = gr.Button("▶ Resume Execution", variant="primary")
+
+                    with gr.Column(scale=1):
+                        resume_status_output = gr.Markdown("### Resume Status\nReady to resume from selected checkpoint.")
+
         # Event handlers
-        async def start_pipeline(name: str, desc: str, files: list[Any] | None, urls: str) -> str:
+        async def start_pipeline(
+            name: str,
+            desc: str,
+            files: list[Any] | None,
+            urls: str,
+            use_local: bool,
+            local_url: str,
+            local_model_name: str,
+        ) -> str:
             """Start the agentic pipeline."""
             if not name or not desc:
                 return "### ⚠️ Error\nPlease provide both a feature name and description."
@@ -153,12 +224,68 @@ def launch_web_ui(settings: Any) -> None:
                 project_id = getattr(settings, "langfuse_init_project_id", "homecare")
                 trace_url = f"{settings.langfuse_host.rstrip('/')}/project/{project_id}/traces/{trace_id}"
                 trace_link = f"\n\n🔗 **Langfuse Trace:** [{trace_id}]({trace_url})"
-            return f"### ⏳ Pipeline Started\n**Feature:** {name}\n**Trace ID:** `{trace_id}`{trace_link}\n\nProcessing..."
+
+            code_engine = f"Local LLM (`{local_model_name}` at `{local_url}`)" if use_local else f"OpenRouter (`{getattr(settings, 'model_code', '') or 'deepseek/deepseek-coder'}`)"
+            return f"### ⏳ Pipeline Started\n**Feature:** {name}\n**Code Engine:** {code_engine}\n**Trace ID:** `{trace_id}`{trace_link}\n\nProcessing..."
 
         submit_btn.click(
             fn=start_pipeline,
-            inputs=[feature_name, feature_desc, wireframe_files, wireframe_urls],
+            inputs=[
+                feature_name,
+                feature_desc,
+                wireframe_files,
+                wireframe_urls,
+                local_llm_toggle,
+                local_llm_url,
+                local_llm_model,
+            ],
             outputs=[status_output],
+        )
+
+        async def resume_pipeline_action(selected_trace: str, chosen_step_label: str) -> str:
+            """Resume execution from a saved checkpoint at chosen step."""
+            if not selected_trace:
+                return "### ⚠️ Error\nPlease select a valid checkpoint to resume."
+            try:
+                cp_data = checkpoint_mgr.load_checkpoint(selected_trace)
+            except Exception as e:
+                return f"### ⚠️ Error\nCould not load checkpoint `{selected_trace}`: {e}"
+
+            step_name = chosen_step_label.split(":")[-1].strip() if ":" in chosen_step_label else chosen_step_label
+            state = cp_data.get("state", {})
+            f_name = state.get("feature_name", cp_data.get("feature_name", "Unknown"))
+            completed = state.get("completed_steps", [])
+
+            trace_link = ""
+            if settings.langfuse_enabled:
+                project_id = getattr(settings, "langfuse_init_project_id", "homecare")
+                trace_url = f"{settings.langfuse_host.rstrip('/')}/project/{project_id}/traces/{selected_trace}"
+                trace_link = f"\n\n🔗 **Langfuse Trace:** [{selected_trace}]({trace_url})"
+
+            return (
+                f"### ⏳ Resuming Pipeline\n"
+                f"**Feature:** {f_name}\n"
+                f"**Trace ID:** `{selected_trace}`{trace_link}\n"
+                f"**Starting Node:** `{step_name}`\n\n"
+                f"**Prior completed steps ({len(completed)}):** `{', '.join(completed) if completed else 'None'}`\n\n"
+                f"Resuming execution from `{step_name}`..."
+            )
+
+        def refresh_checkpoint_choices():
+            choices = _get_cp_choices()
+            new_val = choices[0][1] if choices and choices[0][1] else None
+            return gr.update(choices=choices, value=new_val)
+
+        refresh_cps_btn.click(
+            fn=refresh_checkpoint_choices,
+            inputs=[],
+            outputs=[resume_cp_dropdown],
+        )
+
+        resume_run_btn.click(
+            fn=resume_pipeline_action,
+            inputs=[resume_cp_dropdown, resume_step_dropdown],
+            outputs=[resume_status_output],
         )
 
     port = settings.web_ui_port if hasattr(settings, "web_ui_port") else 7860

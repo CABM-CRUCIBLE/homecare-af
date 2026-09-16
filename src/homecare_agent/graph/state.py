@@ -113,6 +113,7 @@ class AgentState(TypedDict, total=False):
 
     # ─── Status & Resource Tracking ───────────────────────────────────────
     current_step: str
+    resume_from_step: str
     completed_steps: Annotated[list[str], append_list]
     errors: Annotated[list[dict[str, Any]], append_list]
     commit_log: Annotated[list[dict[str, str]], append_list]

@@ -222,5 +222,253 @@ A dedicated test suite was added in [test_guardrails.py](file:///c:/WorkingFolde
 
 **Final Test Results:** **52 passed in 1.90s** (`pytest tests/ -v`).
 
+---
+
+## 7. Security Hardening & Threat Mitigation
+
+A multi-layered defense-in-depth architecture has been implemented across the framework to protect the host, repository, secrets, and services:
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                            Defense-in-Depth Model                           │
+└──────────────────────────────────────┬──────────────────────────────────────┘
+                                       │
+      ┌────────────────────────────────┼────────────────────────────────┐
+      │                                │                                │
+      ▼                                ▼                                ▼
+[Path Sandboxing]              [Safe Git Staging]              [Secret Redaction]
+- validate_safe_path()         - is_forbidden_staging_file()   - SecretMaskingFilter
+- Rejects ../ traversal        - scan_file_for_secrets()       - Scrubs logs and traces
+- Blocks .git / workflows      - Halts on keys, PATs, .env     - Masks sk-*, ghp_*, db URLs
+      │                                │                                │
+      └────────────────────────────────┼────────────────────────────────┘
+                                       │
+      ┌────────────────────────────────┴────────────────────────────────┐
+      │                                                                 │
+      ▼                                                                 ▼
+[Localhost Binding]                                            [Web UI Access Control]
+- docker-compose.yml                                           - 127.0.0.1 binding
+- 127.0.0.1:13000 (Langfuse)                                   - Basic Auth (GRADIO_AUTH_USER)
+- 127.0.0.1:15432 (PostgreSQL)                                 - Prevents unauthorized runs
+```
+
+### 1. Path Traversal & Safe File Writing Guardrail
+- **Module:** [file_tools.py](file:///c:/WorkingFolder/homecare-af/src/homecare_agent/tools/file_tools.py) & [execute_prompt.py](file:///c:/WorkingFolder/homecare-af/src/homecare_agent/graph/nodes/execute_prompt.py)
+- **Functions:** `validate_safe_path(target_path, base_dir)` and `PathTraversalSecurityError`.
+- **Enforcement:**
+  - Verifies `target_path.resolve()` is strictly within `base_dir.resolve()`.
+  - Rejects null bytes and traversal syntax (`..`).
+  - Explicitly blocks writes targeting `.git/`, `.github/workflows/`, `.github/actions/`, `.env*`, and cryptographic key extensions (`.pem`, `.key`, `.pfx`, `.p12`).
+  - Integrated into `write_generated_files` so rogue/hallucinated model paths cannot escape the repository or tamper with VCS hooks.
+
+### 2. Selective Git Staging & Pre-Commit Secret Scanner
+- **Module:** [git_ops.py](file:///c:/WorkingFolder/homecare-af/src/homecare_agent/graph/nodes/git_ops.py)
+- **Functions:** `scan_file_for_secrets(file_path)`, `is_forbidden_staging_file(file_name)`, and `GitSecurityViolationError`.
+- **Enforcement:**
+  - Replaced blind `repo.git.add(A=True)` with selective staging of candidate files.
+  - Automatically blocks staging of forbidden files (`.env*`, `*.pem`, `*.key`, `id_rsa*`, `credentials.json`).
+  - Scans file contents for cryptographic private keys, OpenRouter API keys (`sk-or-v1-*`), Anthropic keys (`sk-ant-*`), and GitHub PATs (`ghp_*`).
+  - Halts git commit and logs critical alerts if sensitive data is detected.
+
+### 3. Sensitive Data Redaction in Logs and Traces
+- **Module:** [src/homecare_agent/security/redaction.py](file:///c:/WorkingFolder/homecare-af/src/homecare_agent/security/redaction.py)
+- **Components:** `redact_secrets(text)` and `SecretMaskingFilter(logging.Filter)`.
+- **Enforcement:**
+  - Automatically scrubs known secret patterns: OpenRouter keys, Anthropic keys, generic API keys, GitHub tokens, Bearer tokens, private keys, and database passwords in connection strings.
+  - Attached to console and file logging handlers in [main.py](file:///c:/WorkingFolder/homecare-af/src/homecare_agent/main.py).
+  - Sanitizes trace metadata in [provider.py](file:///c:/WorkingFolder/homecare-af/src/homecare_agent/llm/provider.py) so raw secrets are never persisted in Langfuse.
+
+### 4. Docker Container Localhost Binding
+- **Configuration:** [docker-compose.yml](file:///c:/WorkingFolder/homecare-af/docker-compose.yml)
+- **Enforcement:**
+  - Port mappings for `homecare-agent` (`127.0.0.1:7860:7860`), `langfuse-server` (`127.0.0.1:13000:3000`), and `langfuse-db` (`127.0.0.1:${LANGFUSE_DB_PORT:-15432}:5432`) are bound explicitly to `127.0.0.1` rather than `0.0.0.0`, preventing exposure to the local network or external interfaces.
+
+### 5. Web UI Access Control
+- **Modules:** [config.py](file:///c:/WorkingFolder/homecare-af/src/homecare_agent/config.py), [.env.example](file:///c:/WorkingFolder/homecare-af/.env.example), [web.py](file:///c:/WorkingFolder/homecare-af/src/homecare_agent/ui/web.py)
+- **Enforcement:**
+  - Added `GRADIO_AUTH_USER` and `GRADIO_AUTH_PASSWORD` configuration options.
+  - Gradio server explicitly binds to `server_name="127.0.0.1"`.
+  - HTTP Basic Authentication is automatically enforced when credentials are configured.
+
+### 6. Automated Security Test Suite
+- **Module:** [tests/test_security.py](file:///c:/WorkingFolder/homecare-af/tests/test_security.py)
+- **Tests Added (13 test cases):**
+  - `test_validate_safe_path_valid`: Verifies standard internal path resolution.
+  - `test_validate_safe_path_traversal_blocked`: Verifies `../` directory traversal is rejected.
+  - `test_validate_safe_path_forbidden_git_dir`: Verifies `.git/hooks` writes are blocked.
+  - `test_validate_safe_path_forbidden_workflows`: Verifies `.github/workflows` writes are blocked.
+  - `test_validate_safe_path_forbidden_env_files`: Verifies `.env` writes are blocked.
+  - `test_validate_safe_path_forbidden_key_extensions`: Verifies `.key`/`.pem` writes are blocked.
+  - `test_write_file_sandboxing`: Verifies `write_file` enforces base directory bounds.
+  - `test_write_generated_files_blocks_path_traversal`: Verifies pipeline skips malicious file entries.
+  - `test_is_forbidden_staging_file`: Verifies forbidden file matching.
+  - `test_scan_file_for_secrets`: Verifies secret detection in file contents.
+  - `test_redact_secrets`: Verifies token masking across text and database URLs.
+  - `test_secret_masking_filter`: Verifies logging filter scrubs records.
+  - `test_commit_and_push_halts_on_secret`: Verifies git staging halts when secrets are detected.
+
+---
+
+### Comprehensive Test Suite Status
+All **70 unit tests** across the entire repository pass cleanly:
+```bash
+pytest tests/ -v
+======================== 70 passed, 1 warning in 3.44s ========================
+```
+
+---
+
+## 8. Locally Hosted LLM Support for Code Generation
+
+Support for locally hosted OpenAI-compatible LLM servers (**Ollama**, **vLLM**, **LM Studio**, **LocalAI**) has been integrated as an optional, opt-in capability while fully retaining OpenRouter as the default cloud provider.
+
+```
+                                  ┌───────────────────────────────────┐
+                                  │      Agentic Pipeline Nodes       │
+                                  └─────────────────┬─────────────────┘
+                                                    │
+                      ┌─────────────────────────────┴─────────────────────────────┐
+                      │                                                           │
+                      ▼                                                           ▼
+         [Architecture / Reviews]                                      [Code Generation Tier]
+       - analyze_codebase                                            - execute_wave
+       - generate_strategy / tactical / ADRs                         - write_files
+       - review_architecture / code_review                           - apply_review_fixes
+                      │                                                           │
+                      ▼                                                           ▼
+           ┌─────────────────────┐                                     ┌─────────────────────┐
+           │     OpenRouter      │                                     │ Local LLM Server    │
+           │ (Claude Sonnet/Opus)│                                     │ (Ollama / vLLM)     │
+           │  https://openrouter │                                     │ http://localhost:...│
+           └─────────────────────┘                                     └─────────────────────┘
+```
+
+### 1. Retention of OpenRouter as Default
+- By default (`LOCAL_LLM_ENABLED=false`), all nodes run through OpenRouter exactly as configured.
+- Existing configurations (`OPENROUTER_API_KEY`, `MODEL_ARCHITECTURE`, `MODEL_CODE`, `MODEL_REVIEW`) continue to function without changes.
+
+### 2. Multi-Endpoint Provider Caching
+- **Implementation:** [provider.py](file:///c:/WorkingFolder/homecare-af/src/homecare_agent/llm/provider.py)
+- `_create_llm` supports custom `base_url`, `api_key`, and `timeout`.
+- Models are cached under compound keys `model@base_url` (e.g. `qwen2.5-coder:32b@http://localhost:11434/v1` and `anthropic/claude-sonnet-4@https://openrouter.ai/api/v1`), allowing local and cloud endpoints to operate concurrently in hybrid mode.
+- `resolve_llm_and_model_for_node` automatically directs code nodes (`execute_wave`, `write_files`, `apply_review_fixes`) to the local server when `local_llm_enabled=True`.
+
+### 3. Supported Local Providers
+- **Ollama:** `http://localhost:11434/v1` with models like `qwen2.5-coder:32b`, `deepseek-coder-v2`, `codellama`.
+- **vLLM:** `http://localhost:8000/v1`
+- **LM Studio:** `http://localhost:1234/v1`
+
+### 4. CLI & Web UI Integration
+- **CLI Options:**
+  ```bash
+  homecare-agent run --local-code --local-llm-url http://localhost:11434/v1 --local-llm-model qwen2.5-coder:32b
+  ```
+- **Web UI:** Toggle and configuration fields embedded inside the `Multi-Tier Model Configuration` accordion in [web.py](file:///c:/WorkingFolder/homecare-af/src/homecare_agent/ui/web.py).
+
+### 5. Automated Tests Added
+- [test_local_llm.py](file:///c:/WorkingFolder/homecare-af/tests/test_local_llm.py):
+  - `test_default_openrouter_routing_when_local_disabled`: Verifies OpenRouter handles all nodes by default.
+  - `test_hybrid_routing_with_local_llm_for_code`: Verifies architecture stays on OpenRouter while code generation routes to Ollama.
+  - `test_multi_endpoint_model_cache`: Verifies independent caching across distinct endpoints.
+  - `test_state_overrides_for_local_llm`: Verifies runtime state overrides for model and URL.
+  - `test_is_code_node_helper`: Verifies tier categorization.
+
+**Test Results:** **70 passed in 3.44s** (`pytest tests/ -v`).
+
+---
+
+## 9. State Checkpointing & Resuming Execution from Step 4
+
+To eliminate the need to re-run early steps (such as intake and codebase analysis) after an interruption, credit exhaustion, or failure, persistent state checkpointing and dynamic entry routing have been implemented.
+
+```
+┌────────────────────────────────────────────────────────────────────────────────────────┐
+│                              LangGraph Dynamic Entry Router                            │
+└───────────────────────────────────────────┬────────────────────────────────────────────┘
+                                            │
+                                            ▼
+                           ┌───────────────────────────────────┐
+                           │ resume_from_step in AgentState?   │
+                           └───────┬───────────────────┬───────┘
+                                   │ No                │ Yes (e.g. "generate_strategy")
+                                   ▼                   ▼
+                           ┌──────────────┐     ┌───────────────────────┐
+                           │    Step 1    │     │   Step 4 (Resumed)    │
+                           │intake_feature│     │   generate_strategy   │
+                           └──────┬───────┘     └───────────┬───────────┘
+                                  │                         │
+                                  ▼                         ▼
+                            [Steps 2 & 3]        [Tactical, ADRs, Waves]
+```
+
+### 1. Persistent Checkpoint Store (`.homecare/checkpoints/`)
+- **Implementation:** [checkpoint.py](file:///c:/WorkingFolder/homecare-af/src/homecare_agent/graph/checkpoint.py)
+- After every node completes, [CheckpointManager](file:///c:/WorkingFolder/homecare-af/src/homecare_agent/graph/checkpoint.py) automatically saves the active [AgentState](file:///c:/WorkingFolder/homecare-af/src/homecare_agent/graph/state.py) as JSON in `.homecare/checkpoints/<trace_id>.json`.
+- When an execution halts or crashes after Step 3 (`analyze_codebase`), the saved checkpoint preserves:
+  - Feature name and requirements description
+  - Clarification answers
+  - Full codebase AST, symbols, and architectural patterns (`codebase_analysis`)
+  - List of completed steps: `["intake_feature", "analyze_codebase"]`
+
+### 2. 14-Step Sequencing & Smart Next-Step Resolution
+Steps are numbered 1 through 14:
+1. `intake_feature`
+2. `ask_clarifications`
+3. `analyze_codebase`
+4. `generate_strategy`
+5. `generate_tactical_plan`
+6. `generate_adrs`
+7. `generate_agentic_prompts`
+8. `review_architecture`
+9. `create_branch`
+10. `execute_wave`
+11. `run_e2e_tests`
+12. `generate_manual_test_doc`
+13. `create_pr`
+14. `notify_ready_for_merge`
+
+- `resolve_next_step(state)` automatically detects the next step after the highest completed step. If Step 3 finished, it automatically resolves to **Step 4 (`generate_strategy`)**!
+- Numeric input (`4` or `"4"`) and canonical names (`"generate_strategy"`) are supported interchangeably.
+
+### 3. Dynamic Entry Routing in LangGraph
+- **Implementation:** [main_graph.py](file:///c:/WorkingFolder/homecare-af/src/homecare_agent/graph/main_graph.py)
+- Replaced the static edge `START → intake_feature` with a conditional router `_route_entry`.
+- If `resume_from_step` is set (e.g. `generate_strategy`), execution immediately starts at that node. All context from earlier steps is injected directly from the loaded checkpoint.
+
+### 4. CLI Commands
+```bash
+# List all saved checkpoints on disk
+homecare-agent resume --list
+
+# Automatically resume the most recent run from its next pending step (Step 4)
+homecare-agent resume
+
+# Resume a specific run from Step 4 (using step number or node name)
+homecare-agent resume --trace-id <trace_id> --from-step 4
+homecare-agent resume --trace-id <trace_id> --from-step generate_strategy
+
+# Or resume directly using the run command
+homecare-agent run --resume <trace_id> --from-step 4
+```
+
+### 5. Web UI Integration
+- Added a **"🔄 Resume Pipeline"** tab in [web.py](file:///c:/WorkingFolder/homecare-af/src/homecare_agent/ui/web.py).
+- Dropdown auto-populates saved runs from `.homecare/checkpoints/` showing the feature name and last completed step.
+- Step dropdown defaults to `Step 4: generate_strategy`, allowing instantaneous one-click resumption.
+
+### 6. Test Suite & Verification
+- Created [test_checkpoint_resume.py](file:///c:/WorkingFolder/homecare-af/tests/test_checkpoint_resume.py):
+  - `test_step_resolution_by_number_and_name`: Validates bi-directional resolution for all 14 steps.
+  - `test_resolve_next_step_after_step_3_failure`: Proves automatic detection of Step 4 after Step 3 stops.
+  - `test_resolve_next_step_explicit_override`: Validates explicit step overrides.
+  - `test_checkpoint_save_and_load`: Tests full state JSON serialization and deserialization.
+  - `test_checkpoint_listing_and_latest`: Validates listing runs ordered newest-first.
+  - `test_langgraph_resumes_directly_from_step_4`: Verifies that Steps 1 and 3 are never called and execution starts directly at Step 4.
+  - `test_cli_resume_list_empty` & `test_cli_resume_list_with_data`: Validates CLI table output.
+- **Test Suite Results:** **78 passed in 3.81s** (`pytest tests/ -v`).
+
+
+
+
 
 

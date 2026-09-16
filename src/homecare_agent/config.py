@@ -100,6 +100,32 @@ class Settings(BaseSettings):
         description="LLM temperature. Low for deterministic code generation.",
     )
 
+    # ─── Local LLM Provider (Optional: Ollama, vLLM, LM Studio, etc.) ────
+    local_llm_enabled: bool = Field(
+        default=False,
+        description="Enable locally hosted LLM endpoint for code generation or overall.",
+    )
+    local_llm_base_url: str = Field(
+        default="http://localhost:11434/v1",
+        description="Base URL for local OpenAI-compatible server (e.g., Ollama, vLLM, LM Studio).",
+    )
+    local_llm_api_key: str = Field(
+        default="ollama",
+        description="API key for local server (defaults to 'ollama' or 'dummy').",
+    )
+    local_llm_code_model: str = Field(
+        default="qwen2.5-coder:32b",
+        description="Model name on local server to use for code generation work packages.",
+    )
+    local_llm_for_code: bool = Field(
+        default=True,
+        description="When local_llm_enabled is True, automatically route code generation nodes to the local LLM.",
+    )
+    local_llm_timeout: float = Field(
+        default=300.0,
+        description="Request timeout in seconds for local LLM invocations.",
+    )
+
     # ─── Langfuse Observability ──────────────────────────────────────────
     langfuse_public_key: str = Field(
         default="",
@@ -281,6 +307,18 @@ class Settings(BaseSettings):
             and self.github_app_installation_id
         )
 
+    def is_code_node(self, node_name: str) -> bool:
+        """Check if a node belongs to the code generation / execution tier."""
+        return node_name in {
+            "execute_wave",
+            "write_files",
+            "run_unit_tests",
+            "run_e2e_tests",
+            "run_load_tests",
+            "generate_manual_test_doc",
+            "apply_review_fixes",
+        }
+
     def get_model_for_node(
         self,
         node_name: str,
@@ -291,12 +329,13 @@ class Settings(BaseSettings):
         Priority order:
         1. Node-specific match in state_overrides['node_models']
         2. Node-specific match in self.node_models
-        3. Role/tier categorized match:
+        3. Local LLM override for code tier (if local_llm_enabled and local_llm_for_code)
+        4. Role/tier categorized match:
            - Architecture/Analysis -> model_architecture
            - Code Gen/Tests -> model_code
            - Reviews -> model_review
            - Intake/Clarification -> model_intake
-        4. self.openrouter_model (default fallback)
+        5. self.openrouter_model (default fallback)
         """
         overrides = state_overrides or {}
 
@@ -325,6 +364,7 @@ class Settings(BaseSettings):
             "run_load_tests",
             "generate_manual_test_doc",
             "write_files",
+            "apply_review_fixes",
         }
         review_nodes = {
             "review_architecture",
@@ -336,7 +376,11 @@ class Settings(BaseSettings):
             "ask_clarifications",
         }
 
-        if node_name in code_nodes:
+        if node_name in code_nodes or self.is_code_node(node_name):
+            if self.local_llm_enabled and self.local_llm_for_code:
+                local_model = overrides.get("local_llm_code_model") or self.local_llm_code_model
+                if local_model:
+                    return local_model
             model = overrides.get("model_code") or self.model_code
             if model:
                 return model

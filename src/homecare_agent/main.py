@@ -76,8 +76,26 @@ def run(
     interactive: bool = typer.Option(True, "--interactive/--no-interactive", help="Interactive mode"),
     log_level: str = typer.Option("INFO", "--log-level", "-l", help="Logging level"),
     log_file: str = typer.Option("", "--log-file", help="Path to log file (defaults to logs/homecare-agent.log)"),
+    local_code: bool | None = typer.Option(None, "--local-code/--no-local-code", help="Route code generation to local LLM (e.g. Ollama/vLLM)"),
+    local_llm_url: str = typer.Option("", "--local-llm-url", help="Base URL for local LLM (default: http://localhost:11434/v1)"),
+    local_llm_model: str = typer.Option("", "--local-llm-model", help="Model name on local LLM server (e.g. qwen2.5-coder:32b)"),
+    resume: str = typer.Option("", "--resume", help="Resume from checkpoint (trace ID, or 'latest')"),
+    from_step: str = typer.Option("", "--from-step", "-s", help="Step number (1-14) or name (e.g. 4 or generate_strategy) to resume from"),
 ) -> None:
-    """Run the full agentic pipeline from feature request to PR."""
+    """Run the full agentic pipeline from feature request to PR, or resume an existing run."""
+    if resume:
+        target_id = "" if resume.lower() in ("true", "1", "latest") else resume
+        _execute_resume(
+            trace_id=target_id,
+            from_step=from_step,
+            log_level=log_level,
+            log_file=log_file,
+            local_code=local_code,
+            local_llm_url=local_llm_url,
+            local_llm_model=local_llm_model,
+        )
+        return
+
     from homecare_agent.config import get_settings
     from homecare_agent.ui.cli import display_banner, prompt_feature_request, prompt_model_selection
 
@@ -95,6 +113,13 @@ def run(
             overrides["model_review"] = model_review
         if log_file:
             overrides["log_file"] = log_file
+        if local_code is not None:
+            overrides["local_llm_enabled"] = local_code
+            overrides["local_llm_for_code"] = local_code
+        if local_llm_url:
+            overrides["local_llm_base_url"] = local_llm_url
+        if local_llm_model:
+            overrides["local_llm_code_model"] = local_llm_model
         settings = get_settings(**overrides)
     except Exception as e:
         console.print(f"[red]Configuration error: {e}[/red]")
@@ -163,7 +188,7 @@ def run(
         display_completion_summary(result)
 
     except KeyboardInterrupt:
-        console.print("\n[yellow]Pipeline interrupted by user.[/yellow]")
+        console.print("\n[yellow]Pipeline interrupted by user. State saved to checkpoint.[/yellow]")
     except Exception as e:
         console.print(f"\n[red]Pipeline failed: {e}[/red]")
         logging.exception("Pipeline failed")
@@ -171,8 +196,174 @@ def run(
         llm.flush_langfuse()
 
 
+@app.command()
+def resume(
+    trace_id: str = typer.Option("", "--trace-id", "-t", help="Trace ID of the checkpoint to resume"),
+    from_step: str = typer.Option("", "--from-step", "-s", help="Step number (1-14) or name (e.g. 4 or generate_strategy) to resume from"),
+    list_checkpoints: bool = typer.Option(False, "--list", "-l", help="List all saved checkpoints"),
+    log_level: str = typer.Option("INFO", "--log-level", help="Logging level"),
+    log_file: str = typer.Option("", "--log-file", help="Path to log file"),
+    local_code: bool | None = typer.Option(None, "--local-code/--no-local-code", help="Route code generation to local LLM"),
+    local_llm_url: str = typer.Option("", "--local-llm-url", help="Base URL for local LLM"),
+    local_llm_model: str = typer.Option("", "--local-llm-model", help="Model name on local LLM"),
+) -> None:
+    """Resume pipeline execution from a saved checkpoint at a specific step (e.g. Step 4)."""
+    _execute_resume(
+        trace_id=trace_id,
+        from_step=from_step,
+        list_checkpoints=list_checkpoints,
+        log_level=log_level,
+        log_file=log_file,
+        local_code=local_code,
+        local_llm_url=local_llm_url,
+        local_llm_model=local_llm_model,
+    )
+
+
+def _execute_resume(
+    trace_id: str = "",
+    from_step: str = "",
+    list_checkpoints: bool = False,
+    log_level: str = "INFO",
+    log_file: str = "",
+    local_code: bool | None = None,
+    local_llm_url: str = "",
+    local_llm_model: str = "",
+) -> None:
+    """Internal handler for resuming pipeline execution."""
+    from homecare_agent.config import get_settings
+    from homecare_agent.graph.checkpoint import (
+        CheckpointManager,
+        get_step_number,
+        resolve_next_step,
+    )
+    from homecare_agent.ui.cli import display_banner
+
+    checkpoint_mgr = CheckpointManager()
+
+    if list_checkpoints:
+        _setup_logging(log_level, log_file)
+        display_banner()
+        cps = checkpoint_mgr.list_checkpoints()
+        if not cps:
+            console.print("[yellow]No checkpoints found in .homecare/checkpoints[/yellow]")
+            return
+
+        from rich.table import Table
+        table = Table(title="Saved Pipeline Checkpoints", header_style="bold cyan")
+        table.add_column("Trace ID", style="dim")
+        table.add_column("Feature Name", style="bold")
+        table.add_column("Last Completed Step", style="yellow")
+        table.add_column("Next Recommended Step", style="green")
+        table.add_column("Saved At", style="dim")
+
+        for cp in cps:
+            last_step = cp.get("last_completed_step", "None")
+            last_num = cp.get("last_completed_step_number")
+            step_display = f"Step {last_num}: {last_step}" if last_num else last_step
+            next_step = cp.get("next_recommended_step", "intake_feature")
+            next_num = get_step_number(next_step)
+            next_display = f"Step {next_num}: {next_step}" if next_num else next_step
+            table.add_row(
+                cp["trace_id"][:12] + "...",
+                cp["feature_name"],
+                step_display,
+                next_display,
+                cp.get("timestamp", "")[:19].replace("T", " "),
+            )
+        console.print(table)
+        console.print("\n[dim]To resume: homecare-agent resume --trace-id <id> [--from-step <step>][/dim]")
+        return
+
+    try:
+        overrides = {}
+        if log_file:
+            overrides["log_file"] = log_file
+        if local_code is not None:
+            overrides["local_llm_enabled"] = local_code
+            overrides["local_llm_for_code"] = local_code
+        if local_llm_url:
+            overrides["local_llm_base_url"] = local_llm_url
+        if local_llm_model:
+            overrides["local_llm_code_model"] = local_llm_model
+        settings = get_settings(**overrides)
+    except Exception as e:
+        console.print(f"[red]Configuration error: {e}[/red]")
+        raise typer.Exit(1)
+
+    _setup_logging(log_level or settings.log_level, settings.log_file)
+    display_banner()
+
+    # If trace_id not specified, pick latest
+    if not trace_id:
+        cps = checkpoint_mgr.list_checkpoints()
+        if not cps:
+            console.print("[red]No saved checkpoints found in .homecare/checkpoints to resume.[/red]")
+            console.print("[dim]Run `homecare-agent run` to start a new pipeline run.[/dim]")
+            raise typer.Exit(1)
+        latest = cps[0]
+        trace_id = latest["trace_id"]
+        console.print(f"[dim]No trace ID specified. Resuming latest run: {trace_id}[/dim]")
+
+    try:
+        checkpoint_data = checkpoint_mgr.load_checkpoint(trace_id)
+    except FileNotFoundError as e:
+        console.print(f"[red]{e}[/red]")
+        raise typer.Exit(1)
+
+    saved_state = checkpoint_data.get("state", {})
+    feature_name = saved_state.get("feature_name") or checkpoint_data.get("feature_name", "Unknown")
+
+    # Determine step to resume from
+    try:
+        resume_step = resolve_next_step(saved_state, explicit_step=from_step)
+    except ValueError as e:
+        console.print(f"[red]{e}[/red]")
+        raise typer.Exit(1)
+
+    step_num = get_step_number(resume_step)
+    last_step = checkpoint_data.get("last_completed_step", "None")
+
+    console.print(f"\n[bold cyan]🔄 Resuming Pipeline for: {feature_name}[/bold cyan]")
+    console.print(f"[dim]Trace ID: {trace_id}[/dim]")
+    console.print(f"[yellow]Last Completed Step: {last_step}[/yellow]")
+    console.print(f"[bold green]▶ Resuming from Step {step_num or '?'}: {resume_step}[/bold green]")
+    prior_steps = saved_state.get("completed_steps", [])
+    if prior_steps:
+        console.print(f"[dim]Prior completed steps: {', '.join(prior_steps)}[/dim]\n")
+
+    # Set resume target in state
+    saved_state["resume_from_step"] = resume_step
+    saved_state["current_step"] = resume_step
+
+    # Initialize LLM provider & Langfuse
+    from homecare_agent.llm.provider import LLMProvider
+    llm = LLMProvider(settings)
+    llm.set_workflow_trace(trace_id, trace_name=feature_name)
+
+    if settings.langfuse_enabled:
+        project_id = getattr(settings, "langfuse_init_project_id", "homecare")
+        console.print(f"[dim]Langfuse Trace: {settings.langfuse_host.rstrip('/')}/project/{project_id}/traces/{trace_id}[/dim]\n")
+
+    # Build and compile graph
+    from homecare_agent.graph.main_graph import compile_graph
+    graph = compile_graph(settings, llm)
+
+    try:
+        result = asyncio.run(_run_pipeline(graph, saved_state, trace_id=trace_id, llm=llm))
+        from homecare_agent.ui.cli import display_completion_summary
+        display_completion_summary(result)
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Pipeline interrupted by user. State saved to checkpoint.[/yellow]")
+    except Exception as e:
+        console.print(f"\n[red]Pipeline failed: {e}[/red]")
+        logging.exception("Pipeline failed during resume")
+    finally:
+        llm.flush_langfuse()
+
+
 async def _run_pipeline(graph: object, initial_state: dict, trace_id: str = "", llm: Any = None) -> dict:
-    """Run the compiled graph pipeline with optional Langfuse tracing callback.
+    """Run the compiled graph pipeline with state checkpointing and tracing.
 
     Args:
         graph: Compiled LangGraph runnable.
@@ -183,18 +374,27 @@ async def _run_pipeline(graph: object, initial_state: dict, trace_id: str = "", 
     Returns:
         Final state dictionary.
     """
-    from homecare_agent.ui.cli import display_step_progress
+    from homecare_agent.graph.checkpoint import CheckpointManager
+    from homecare_agent.ui.cli import display_error, display_step_progress
 
+    checkpoint_mgr = CheckpointManager()
     config: dict[str, Any] = {}
     if llm and trace_id:
         handler = llm.get_langfuse_handler(trace_id)
         if handler:
             config["callbacks"] = [handler]
 
-    final_state = {}
+    final_state = dict(initial_state)
     stream_kwargs: dict[str, Any] = {}
     if config:
         stream_kwargs["config"] = config
+
+    # Save initial checkpoint
+    if trace_id:
+        try:
+            checkpoint_mgr.save_checkpoint(trace_id, final_state, last_step="")
+        except Exception as e:
+            logger.debug("Initial checkpoint save note: %s", e)
 
     async for event in graph.astream(initial_state, **stream_kwargs):  # type: ignore[union-attr]
         for node_name, state_update in event.items():
@@ -202,10 +402,16 @@ async def _run_pipeline(graph: object, initial_state: dict, trace_id: str = "", 
             display_step_progress(step, "completed")
             final_state.update(state_update)
 
+            # Auto-save checkpoint after each completed node
+            if trace_id:
+                try:
+                    checkpoint_mgr.save_checkpoint(trace_id, final_state, last_step=step)
+                except Exception as e:
+                    logger.warning("Could not auto-save checkpoint for %s: %s", step, e)
+
             # Display errors if any
             errors = state_update.get("errors", [])
             for error in errors:
-                from homecare_agent.ui.cli import display_error
                 display_error(error)
 
     return final_state

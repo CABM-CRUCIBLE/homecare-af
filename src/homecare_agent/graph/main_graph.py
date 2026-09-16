@@ -95,8 +95,20 @@ def build_graph(settings: Settings, llm: LLMProvider) -> StateGraph:
 
     # ─── Edge Wiring ─────────────────────────────────────────────────────
 
-    # Entry
-    graph.add_edge(START, "intake_feature")
+    # ─── Dynamic Entry Routing ───────────────────────────────────────────
+    # Supports starting fresh at intake_feature OR resuming from any step (e.g. Step 4)
+    from homecare_agent.graph.checkpoint import ENTRY_ELIGIBLE_NODES
+
+    def _route_entry(state: AgentState) -> str:
+        resume_step = state.get("resume_from_step")
+        if resume_step and resume_step in ENTRY_ELIGIBLE_NODES:
+            logger.info("[RESUME:ENTRY] Resuming workflow directly from step '%s'", resume_step)
+            return resume_step
+        return "intake_feature"
+
+    entry_targets = {node: node for node in ENTRY_ELIGIBLE_NODES}
+    entry_targets["intake_feature"] = "intake_feature"
+    graph.add_conditional_edges(START, _route_entry, entry_targets)
 
     # Clarification loop
     graph.add_conditional_edges("intake_feature", partial(needs_clarification, settings=settings))

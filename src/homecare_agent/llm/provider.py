@@ -239,21 +239,34 @@ class LLMProvider:
 
         return self._active_handlers[norm_id]
 
-    def _create_llm(self, model: str) -> ChatOpenAI:
-        """Create a ChatOpenAI instance pointed at OpenRouter.
+    def _create_llm(
+        self,
+        model: str,
+        base_url: str | None = None,
+        api_key: str | None = None,
+        timeout: float | None = None,
+    ) -> ChatOpenAI:
+        """Create a ChatOpenAI instance pointed at OpenRouter or a local OpenAI-compatible server.
 
         Args:
-            model: The OpenRouter model identifier.
+            model: The model identifier (OpenRouter slug or local model name).
+            base_url: Optional API base URL override (e.g. local endpoint).
+            api_key: Optional API key override.
+            timeout: Optional HTTP request timeout in seconds.
 
         Returns:
             A configured ChatOpenAI instance.
         """
+        effective_base_url = (base_url or self._settings.openrouter_base_url).strip()
+        effective_api_key = (api_key or self._settings.openrouter_api_key).strip()
+
         kwargs: dict[str, Any] = {
-            "openai_api_key": self._settings.openrouter_api_key,
-            "openai_api_base": self._settings.openrouter_base_url,
+            "openai_api_key": effective_api_key,
+            "openai_api_base": effective_base_url,
             "model": model,
             "max_tokens": self._settings.max_tokens,
             "temperature": self._settings.temperature,
+            "request_timeout": timeout or 300.0,
             "model_kwargs": {
                 "headers": {
                     "HTTP-Referer": "https://homecare-agent.local",
@@ -263,12 +276,30 @@ class LLMProvider:
         }
         return ChatOpenAI(**kwargs)
 
-    def get_llm(self, model: str) -> ChatOpenAI:
-        """Get or create a cached ChatOpenAI instance for the given model identifier."""
+    def get_llm(
+        self,
+        model: str,
+        base_url: str | None = None,
+        api_key: str | None = None,
+        timeout: float | None = None,
+    ) -> ChatOpenAI:
+        """Get or create a cached ChatOpenAI instance for the given model identifier and endpoint."""
         clean_model = model.strip() or self._settings.openrouter_model or "anthropic/claude-sonnet-4"
-        if clean_model not in self._model_cache:
-            self._model_cache[clean_model] = self._create_llm(clean_model)
-        return self._model_cache[clean_model]
+        effective_base_url = (base_url or self._settings.openrouter_base_url).strip()
+        cache_key = f"{clean_model}@{effective_base_url}"
+
+        if clean_model in self._model_cache and not base_url:
+            return self._model_cache[clean_model]
+        if cache_key in self._model_cache:
+            return self._model_cache[cache_key]
+
+        self._model_cache[cache_key] = self._create_llm(
+            clean_model,
+            base_url=effective_base_url,
+            api_key=api_key,
+            timeout=timeout,
+        )
+        return self._model_cache[cache_key]
 
     def get_llm_for_node(
         self,
@@ -277,10 +308,51 @@ class LLMProvider:
         state_overrides: dict[str, Any] | None = None,
     ) -> ChatOpenAI:
         """Resolve and return the ChatOpenAI instance assigned to a specific LangGraph node."""
+        llm, _ = self.resolve_llm_and_model_for_node(node_name, model_override, state_overrides)
+        return llm
+
+    def resolve_llm_and_model_for_node(
+        self,
+        node_name: str,
+        model_override: str = "",
+        state_overrides: dict[str, Any] | None = None,
+    ) -> tuple[ChatOpenAI, str]:
+        """Resolve and return the ChatOpenAI instance and model name assigned to a specific LangGraph node."""
+        overrides = state_overrides or {}
         if model_override:
-            return self.get_llm(model_override)
+            return self.get_llm(model_override), model_override
+
+        # Check local LLM routing for code generation nodes
+        if (
+            self._settings.local_llm_enabled
+            and self._settings.local_llm_for_code
+            and self._settings.is_code_node(node_name)
+        ):
+            local_model = (
+                overrides.get("local_llm_code_model")
+                or self._settings.local_llm_code_model
+            )
+            local_url = (
+                overrides.get("local_llm_base_url")
+                or self._settings.local_llm_base_url
+            )
+            local_key = (
+                overrides.get("local_llm_api_key")
+                or self._settings.local_llm_api_key
+            )
+            timeout = self._settings.local_llm_timeout
+            logger.info(
+                "[ROUTING:LocalLLM] Routing code node '%s' to local LLM: model='%s', url='%s'",
+                node_name,
+                local_model,
+                local_url,
+            )
+            llm = self.get_llm(local_model, base_url=local_url, api_key=local_key, timeout=timeout)
+            return llm, local_model
+
+        # Standard OpenRouter model routing
         model = self._settings.get_model_for_node(node_name, state_overrides)
-        return self.get_llm(model)
+        return self.get_llm(model), model
 
     @property
     def llm(self) -> ChatOpenAI:
@@ -339,8 +411,9 @@ class LLMProvider:
             effective_model = model_override
             llm = self.get_llm(model_override)
         elif node_name:
-            effective_model = self._settings.get_model_for_node(node_name, state_overrides)
-            llm = self.get_llm(effective_model)
+            llm, effective_model = self.resolve_llm_and_model_for_node(
+                node_name, state_overrides=state_overrides
+            )
         else:
             effective_model = self._settings.openrouter_model or "anthropic/claude-sonnet-4"
             llm = self._llm
