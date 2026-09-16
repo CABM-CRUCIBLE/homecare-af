@@ -97,6 +97,7 @@ class AgentState(TypedDict, total=False):
     current_wave: int
     current_wp_index: int
     generated_code: Annotated[dict[str, str], merge_dicts]
+    written_files: Annotated[list[str], append_list]
 
     # ─── Testing ─────────────────────────────────────────────────────────
     backend_test_results: Annotated[dict[str, Any], merge_dicts]

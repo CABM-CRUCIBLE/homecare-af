@@ -102,9 +102,9 @@ def write_file(
     return path
 
 
-def delete_file(file_path: str | Path) -> bool:
-    """Delete a file if it exists."""
-    path = Path(file_path)
+def delete_file(file_path: str | Path, base_dir: str | Path | None = None) -> bool:
+    """Delete a file if it exists, ensuring path is safely sandboxed if base_dir is provided."""
+    path = validate_safe_path(file_path, base_dir) if base_dir else Path(file_path)
     if path.exists():
         path.unlink()
         logger.info("Deleted file %s", path)

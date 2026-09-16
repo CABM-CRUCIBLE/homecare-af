@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -134,10 +135,11 @@ def npm_build(frontend_path: str | Path) -> BuildResult:
     path = Path(frontend_path)
     logger.info("Running frontend npm build in %s...", path)
     try:
+        # shell is required on Windows because npm is a .cmd batch script; list args avoid shell injection
         proc = subprocess.run(
             ["npm", "run", "build"],
             cwd=str(path), capture_output=True, text=True, timeout=300,
-            shell=True,  # Required on Windows for npm
+            shell=(sys.platform == "win32"),
         )
         logger.info("npm build finished with returncode %d (success=%s)", proc.returncode, proc.returncode == 0)
         return BuildResult(
@@ -169,10 +171,11 @@ def npm_test(frontend_path: str | Path) -> TestResult:
     path = Path(frontend_path)
     logger.info("Running frontend npm test in %s...", path)
     try:
+        # shell is required on Windows because npm is a .cmd batch script; list args avoid shell injection
         proc = subprocess.run(
             ["npm", "test", "--", "--run"],
             cwd=str(path), capture_output=True, text=True, timeout=300,
-            shell=True,
+            shell=(sys.platform == "win32"),
         )
         output = proc.stdout
         passed = _extract_count(output, "passed")
@@ -210,10 +213,11 @@ def npm_lint(frontend_path: str | Path) -> BuildResult:
     path = Path(frontend_path)
     logger.info("Running npm lint in %s...", path)
     try:
+        # shell is required on Windows because npm is a .cmd batch script; list args avoid shell injection
         proc = subprocess.run(
             ["npm", "run", "lint"],
             cwd=str(path), capture_output=True, text=True, timeout=120,
-            shell=True,
+            shell=(sys.platform == "win32"),
         )
         logger.info("npm lint completed with returncode %d", proc.returncode)
         return BuildResult(

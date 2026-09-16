@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import subprocess
+import sys
 from functools import partial
 from typing import Any
 
@@ -352,7 +354,7 @@ async def _run_tests(state: AgentState, settings: Settings, test_type: str = "un
             if any(backend_dir.glob("*.sln")) or any(backend_dir.glob("*.csproj")) or (backend_dir / "code" / "backend").exists():
                 proc = await asyncio.to_thread(
                     subprocess.run,
-                    ["dotnet", "test", "--no-build", "--verbosity", "minimal"],
+                    ["dotnet", "test", "--verbosity", "minimal"],
                     cwd=str(backend_dir),
                     capture_output=True,
                     text=True,
@@ -375,6 +377,7 @@ async def _run_tests(state: AgentState, settings: Settings, test_type: str = "un
                     capture_output=True,
                     text=True,
                     timeout=300,
+                    shell=(sys.platform == "win32"),
                 )
                 results["frontend_output"] = proc.stdout
                 results["frontend_returncode"] = proc.returncode
@@ -394,6 +397,7 @@ async def _run_tests(state: AgentState, settings: Settings, test_type: str = "un
                     capture_output=True,
                     text=True,
                     timeout=600,
+                    shell=(sys.platform == "win32"),
                 )
                 results["e2e_output"] = proc.stdout
                 results["e2e_returncode"] = proc.returncode

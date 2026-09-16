@@ -187,3 +187,102 @@ public class OrderService
     cs_content = parsed["src/Services/OrderService.cs"]
     assert "public class OrderService" in cs_content
     assert "`inline backticks`" in cs_content
+
+
+# ─── Fix 7: Git commit before push (B-02) ───────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_commit_and_push_calls_index_commit(tmp_path: Path):
+    """Verify commit_and_push calls repo.index.commit before pushing to remote."""
+    from homecare_agent.graph.nodes.git_ops import commit_and_push
+
+    repo_dir = tmp_path / "repo"
+    repo_dir.mkdir()
+    file_path = repo_dir / "src" / "Service.cs"
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+    file_path.write_text("// safe code", encoding="utf-8")
+
+    state = {
+        "repo_path": str(repo_dir),
+        "branch_name": "feature/test-branch",
+        "trace_id": "0123456789abcdef0123456789abcdef",
+    }
+    settings = Settings(openrouter_api_key="sk-test", repo_path=str(repo_dir))
+
+    mock_repo = MagicMock()
+    mock_repo.index.diff.return_value = []
+    mock_repo.untracked_files = ["src/Service.cs"]
+
+    mock_remote = MagicMock()
+    mock_remote.name = "origin"
+    mock_repo.remotes = [mock_remote]
+
+    with patch("git.Repo", return_value=mock_repo), \
+         patch("homecare_agent.graph.nodes.git_ops.scan_file_for_secrets", return_value=[]):
+        result = await commit_and_push(state, settings, message="feat: added Service", step_name="step_test")
+
+    mock_repo.git.add.assert_called_once_with(["src/Service.cs"])
+    mock_repo.index.commit.assert_called_once_with("feat: added Service")
+    mock_remote.push.assert_called_once_with("feature/test-branch")
+    assert result["current_step"] == "step_test"
+
+
+# ─── Fix 8: SHA-256 Trace ID Normalization (Md-02) ──────────────────────────
+
+
+def test_normalize_trace_id_sha256():
+    """Verify non-standard trace IDs are normalized to 32-char hex via SHA-256."""
+    from homecare_agent.llm.provider import normalize_trace_id
+    import hashlib
+
+    custom_id = "homecare-workflow-feature-12345-long-slug"
+    cleaned = custom_id.replace("-", "").strip().lower()
+    norm = normalize_trace_id(custom_id)
+    assert len(norm) == 32
+    assert norm == hashlib.sha256(cleaned.encode("utf-8")).hexdigest()[:32]
+
+
+# ─── Fix 9: File Tools delete_file Sandboxing (Md-01) ────────────────────────
+
+
+def test_delete_file_sandboxed(tmp_path: Path):
+    """Verify delete_file respects sandboxing and deletes within base directory."""
+    from homecare_agent.tools.file_tools import delete_file, PathTraversalSecurityError
+
+    sandbox = tmp_path / "sandbox"
+    sandbox.mkdir()
+    target = sandbox / "test.txt"
+    target.write_text("hello", encoding="utf-8")
+
+    assert target.exists()
+    assert delete_file("test.txt", base_dir=sandbox) is True
+    assert not target.exists()
+
+    with pytest.raises(PathTraversalSecurityError):
+        delete_file("../outside.txt", base_dir=sandbox)
+
+
+# ─── Fix 10: State Tracking for Written Files (M-04) ─────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_write_generated_files_returns_written_files_list(tmp_path: Path):
+    """Verify write_generated_files tracks and returns written_files in state."""
+    from homecare_agent.graph.nodes.execute_prompt import write_generated_files
+
+    state = {
+        "repo_path": str(tmp_path),
+        "feature_name": "Test Feature",
+        "generated_code": {
+            "src/models/User.cs": "namespace HomeCare; public class User {}",
+            "src/models/Order.cs": "namespace HomeCare; public class Order {}",
+        },
+    }
+    settings = Settings(openrouter_api_key="sk-test", repo_path=str(tmp_path))
+
+    result = await write_generated_files(state, settings)
+    assert "written_files" in result
+    assert "src/models/User.cs" in result["written_files"]
+    assert "src/models/Order.cs" in result["written_files"]
+    assert (tmp_path / "src" / "models" / "User.cs").exists()

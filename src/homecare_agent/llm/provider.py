@@ -98,8 +98,8 @@ def normalize_trace_id(trace_id: str | None) -> str:
     if _HEX_32_PATTERN.match(cleaned):
         return cleaned
 
-    # Deterministically hash non-conforming IDs to a valid 32-char hex string
-    return hashlib.md5(cleaned.encode("utf-8")).hexdigest()
+    # Deterministically hash non-conforming IDs to a valid 32-char hex string using SHA-256
+    return hashlib.sha256(cleaned.encode("utf-8")).hexdigest()[:32]
 
 
 
@@ -128,6 +128,7 @@ class LLMProvider:
 
         self._model_cache: dict[str, ChatOpenAI] = {}
         self._call_count = 0
+        self._budget_lock = asyncio.Lock()
         self._semaphore = asyncio.Semaphore(max(1, settings.max_parallel_workers))
 
         # Primary LLM (text generation)
@@ -374,6 +375,83 @@ class LLMProvider:
         """The Langfuse client instance, if enabled."""
         return self._langfuse_client
 
+    def _check_and_increment_budget_sync(self) -> None:
+        """Check and increment the LLM call budget synchronously."""
+        if self._call_count >= self._settings.max_llm_calls_per_run:
+            raise LLMBudgetExceededError(
+                f"Global LLM call limit reached ({self._call_count}/{self._settings.max_llm_calls_per_run}). "
+                "Halting run to prevent runaway API spend."
+            )
+        self._call_count += 1
+
+    async def _check_and_increment_budget_async(self) -> None:
+        """Check and increment the LLM call budget under an async lock."""
+        async with self._budget_lock:
+            self._check_and_increment_budget_sync()
+
+    async def _execute_with_retry_async(
+        self,
+        llm: ChatOpenAI,
+        messages: list[BaseMessage],
+        kwargs: dict[str, Any],
+        *,
+        node_name: str,
+        effective_model: str,
+        target_trace_id: str,
+    ) -> str:
+        """Execute an async LLM call with retry, budget checking, and concurrency control."""
+        async with self._semaphore:
+            await self._check_and_increment_budget_async()
+            max_retries = max(1, self._settings.max_retries)
+            last_exception: Exception | None = None
+
+            for attempt in range(1, max_retries + 1):
+                try:
+                    response = await llm.ainvoke(messages, **kwargs)
+                    return str(response.content)
+                except Exception as e:
+                    last_exception = e
+                    if _is_credit_exhaustion_error(e):
+                        logger.critical(
+                            "[CRITICAL:LLMProvider][trace_id=%s] Credit exhaustion detected (HTTP 402/insufficient credits): %s. "
+                            "Immediate fail-fast triggered to prevent retries.",
+                            target_trace_id or "none",
+                            e,
+                        )
+                        raise InsufficientCreditsError(
+                            f"OpenRouter API key has insufficient credits: {e}"
+                        ) from e
+
+                    if _is_retryable_error(e) and attempt < max_retries:
+                        backoff = (2 ** attempt) + 0.5
+                        logger.warning(
+                            "[WARN:LLMProvider][trace_id=%s] Transient error on attempt %d/%d for node '%s': %s. Backing off for %.1fs...",
+                            target_trace_id or "none",
+                            attempt,
+                            max_retries,
+                            node_name or "(default)",
+                            e,
+                            backoff,
+                        )
+                        await asyncio.sleep(backoff)
+                        continue
+
+                    logger.error(
+                        "[ERROR:LLMProvider][trace_id=%s] LLM ainvoke failed on attempt %d/%d for node '%s' (model: %s): %s",
+                        target_trace_id or "none",
+                        attempt,
+                        max_retries,
+                        node_name or "(default)",
+                        effective_model,
+                        e,
+                        exc_info=True,
+                    )
+                    raise
+
+            if last_exception:
+                raise last_exception
+            raise RuntimeError("Unexpected state: LLM invocation exited without response or exception.")
+
     async def ainvoke(
         self,
         prompt: str,
@@ -456,63 +534,14 @@ class LLMProvider:
             target_trace_id or "none",
         )
 
-        if self._call_count >= self._settings.max_llm_calls_per_run:
-            raise LLMBudgetExceededError(
-                f"Global LLM call limit reached ({self._call_count}/{self._settings.max_llm_calls_per_run}). "
-                "Halting run to prevent runaway API spend."
-            )
-        self._call_count += 1
-
-        max_retries = max(1, self._settings.max_retries)
-        last_exception: Exception | None = None
-
-        async with self._semaphore:
-            for attempt in range(1, max_retries + 1):
-                try:
-                    response = await llm.ainvoke(messages, **kwargs)
-                    return str(response.content)
-                except Exception as e:
-                    last_exception = e
-                    if _is_credit_exhaustion_error(e):
-                        logger.critical(
-                            "[CRITICAL:LLMProvider][trace_id=%s] Credit exhaustion detected (HTTP 402/insufficient credits): %s. "
-                            "Immediate fail-fast triggered to prevent retries.",
-                            target_trace_id or "none",
-                            e,
-                        )
-                        raise InsufficientCreditsError(
-                            f"OpenRouter API key has insufficient credits: {e}"
-                        ) from e
-
-                    if _is_retryable_error(e) and attempt < max_retries:
-                        backoff = (2 ** attempt) + 0.5
-                        logger.warning(
-                            "[WARN:LLMProvider][trace_id=%s] Transient error on attempt %d/%d for node '%s': %s. Backing off for %.1fs...",
-                            target_trace_id or "none",
-                            attempt,
-                            max_retries,
-                            node_name or "(default)",
-                            e,
-                            backoff,
-                        )
-                        await asyncio.sleep(backoff)
-                        continue
-
-                    logger.error(
-                        "[ERROR:LLMProvider][trace_id=%s] LLM ainvoke failed on attempt %d/%d for node '%s' (model: %s): %s",
-                        target_trace_id or "none",
-                        attempt,
-                        max_retries,
-                        node_name or "(default)",
-                        effective_model,
-                        e,
-                        exc_info=True,
-                    )
-                    raise
-
-        if last_exception:
-            raise last_exception
-        raise RuntimeError("Unexpected state: LLM invocation exited without response or exception.")
+        return await self._execute_with_retry_async(
+            llm,
+            messages,
+            kwargs,
+            node_name=node_name or "(default)",
+            effective_model=effective_model,
+            target_trace_id=target_trace_id,
+        )
 
     async def ainvoke_with_vision(
         self,
@@ -606,61 +635,16 @@ class LLMProvider:
                 "metadata": metadata,
             }
 
-        if self._call_count >= self._settings.max_llm_calls_per_run:
-            raise LLMBudgetExceededError(
-                f"Global LLM call limit reached ({self._call_count}/{self._settings.max_llm_calls_per_run}). "
-                "Halting run to prevent runaway API spend."
-            )
-        self._call_count += 1
+        effective_model = self._settings.effective_vision_model or "anthropic/claude-sonnet-4"
 
-        max_retries = max(1, self._settings.max_retries)
-        last_exception: Exception | None = None
-
-        async with self._semaphore:
-            for attempt in range(1, max_retries + 1):
-                try:
-                    response = await self._vision_llm.ainvoke(messages, **kwargs)
-                    return str(response.content)
-                except Exception as e:
-                    last_exception = e
-                    if _is_credit_exhaustion_error(e):
-                        logger.critical(
-                            "[CRITICAL:LLMProvider][trace_id=%s] Credit exhaustion detected in vision LLM: %s. "
-                            "Immediate fail-fast triggered to prevent retries.",
-                            target_trace_id or "none",
-                            e,
-                        )
-                        raise InsufficientCreditsError(
-                            f"OpenRouter API key has insufficient credits: {e}"
-                        ) from e
-
-                    if _is_retryable_error(e) and attempt < max_retries:
-                        backoff = (2 ** attempt) + 0.5
-                        logger.warning(
-                            "[WARN:LLMProvider][trace_id=%s] Vision LLM transient error on attempt %d/%d: %s. Backing off for %.1fs...",
-                            target_trace_id or "none",
-                            attempt,
-                            max_retries,
-                            e,
-                            backoff,
-                        )
-                        await asyncio.sleep(backoff)
-                        continue
-
-                    logger.error(
-                        "[ERROR:LLMProvider][trace_id=%s] Vision LLM ainvoke failed on attempt %d/%d for node '%s': %s",
-                        target_trace_id or "none",
-                        attempt,
-                        max_retries,
-                        node_name or "(default)",
-                        e,
-                        exc_info=True,
-                    )
-                    raise
-
-        if last_exception:
-            raise last_exception
-        raise RuntimeError("Unexpected state: Vision LLM invocation exited without response or exception.")
+        return await self._execute_with_retry_async(
+            self._vision_llm,
+            messages,
+            kwargs,
+            node_name=node_name or "vision",
+            effective_model=effective_model,
+            target_trace_id=target_trace_id,
+        )
 
     def invoke_sync(
         self,
@@ -707,12 +691,7 @@ class LLMProvider:
                 "metadata": metadata,
             }
 
-        if self._call_count >= self._settings.max_llm_calls_per_run:
-            raise LLMBudgetExceededError(
-                f"Global LLM call limit reached ({self._call_count}/{self._settings.max_llm_calls_per_run}). "
-                "Halting run to prevent runaway API spend."
-            )
-        self._call_count += 1
+        self._check_and_increment_budget_sync()
 
         try:
             response = self._llm.invoke(messages, **kwargs)

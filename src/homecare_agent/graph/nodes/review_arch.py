@@ -120,6 +120,11 @@ Generate the review as a COMPLETE markdown document following this structure:
 ## 2. Review Scorecard (table: Category, Grade, Notes)
 ## 3-N. Section-by-section analysis with findings
 ## Final Section: Summary of all findings (table: ID, Severity, Category, Description)
+
+At the very end of your response, output a structured verdict code block:
+```verdict
+{{"verdict": "APPROVED" | "APPROVED_WITH_OBSERVATIONS" | "REQUEST_CHANGES" | "REJECTED", "has_blocking_findings": true | false}}
+```
 """
 
     try:
@@ -133,12 +138,40 @@ Generate the review as a COMPLETE markdown document following this structure:
             trace_metadata={"feature_name": feature_name, "trace_id": trace_id},
         )
 
-        # Determine if architecture is approved based on review content
-        response_lower = response.lower()
-        has_blocking = "blocking" in response_lower and ("finding" in response_lower or "severity" in response_lower)
-        is_rejected = "rejected" in response_lower or "request changes" in response_lower
+        # Determine if architecture is approved based on structured verdict or heuristics
+        import json
+        import re
 
-        approved = not (has_blocking and is_rejected)
+        approved = False
+        verdict_match = re.search(r"```verdict\s*(\{.*?\})\s*```", response, re.DOTALL)
+        if verdict_match:
+            try:
+                verdict_data = json.loads(verdict_match.group(1))
+                v = str(verdict_data.get("verdict", "")).upper()
+                has_blocking = bool(verdict_data.get("has_blocking_findings", False))
+                approved = v in ("APPROVED", "APPROVED_WITH_OBSERVATIONS") and not has_blocking
+            except Exception as parse_err:
+                logger.debug("Failed to parse verdict JSON block: %s", parse_err)
+                verdict_match = None
+
+        if not verdict_match:
+            # Fallback heuristic: check executive verdict and finding severities
+            response_lower = response.lower()
+            is_explicit_rejection = any(term in response_lower for term in [
+                "verdict: rejected",
+                "verdict: request changes",
+                "verdict: changes requested",
+                "verdict**: rejected",
+                "verdict**: request changes",
+                "verdict**: changes requested",
+                "executive verdict: rejected",
+                "executive verdict: request changes",
+            ])
+            has_blocking_findings = bool(
+                re.search(r"\|\s*b-\d+\s*\|\s*blocking\b", response_lower)
+                or re.search(r"\bseverity:\s*blocking\b", response_lower)
+            )
+            approved = not (is_explicit_rejection or has_blocking_findings)
 
         logger.info(
             "[COMPLETED:review_architecture][trace_id=%s] Architecture review completed (approved=%s, %d chars generated)",

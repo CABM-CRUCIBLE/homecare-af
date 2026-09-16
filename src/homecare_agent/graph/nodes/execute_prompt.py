@@ -196,43 +196,32 @@ IMPORTANT: For each file you generate, format your output as:
 Generate ALL files specified in the scope. Every file must be COMPLETE.
 """
 
-    try:
-        logger.debug("[_execute_single_wp][trace_id=%s] Invoking LLM for work package %s...", trace_id, wp_id)
-        response = await llm.ainvoke(
-            prompt=full_prompt,
-            system_prompt=CODE_GENERATOR_PERSONA,
-            node_name="execute_wave",
-            state_overrides=state,
-            trace_name=f"execute_wp_{wp_id}",
-            trace_metadata={"wp_id": wp_id, "wp_title": wp_title, "trace_id": trace_id},
-        )
+    logger.debug("[_execute_single_wp][trace_id=%s] Invoking LLM for work package %s...", trace_id, wp_id)
+    response = await llm.ainvoke(
+        prompt=full_prompt,
+        system_prompt=CODE_GENERATOR_PERSONA,
+        node_name="execute_wave",
+        state_overrides=state,
+        trace_name=f"execute_wp_{wp_id}",
+        trace_metadata={"wp_id": wp_id, "wp_title": wp_title, "trace_id": trace_id},
+    )
 
-        # Parse file contents from response
-        files = _parse_generated_files(response)
-        logger.info(
-            "[COMPLETED:_execute_single_wp][trace_id=%s] Work package %s generated %d file(s).",
-            trace_id,
-            wp_id,
-            len(files),
-        )
-        return {"files": files}
-
-    except Exception as e:
-        logger.error(
-            "[ERROR:_execute_single_wp][trace_id=%s] Work package %s execution failed: %s",
-            trace_id,
-            wp_id,
-            e,
-            exc_info=True,
-        )
-        return {"files": {}}
+    # Parse file contents from response
+    files = _parse_generated_files(response)
+    logger.info(
+        "[COMPLETED:_execute_single_wp][trace_id=%s] Work package %s generated %d file(s).",
+        trace_id,
+        wp_id,
+        len(files),
+    )
+    return {"files": files}
 
 
 def _parse_generated_files(response: str) -> dict[str, str]:
     """Parse generated file contents from LLM response.
 
     Splits by '### FILE:' headers and extracts code within outer fences,
-    preserving any internal nested backticks, templates, or markdown blocks.
+    handling nested backticks and various language markers cleanly.
 
     Args:
         response: LLM response text.
@@ -258,16 +247,21 @@ def _parse_generated_files(response: str) -> dict[str, str]:
 
         body = lines[1].strip()
 
-        # Look for opening fence ```<lang>
-        fence_match = re.search(r"^```[a-zA-Z0-9_\-]*\r?\n", body)
+        # Check for opening fence: ``` or ```` followed by optional language tag
+        fence_match = re.match(r"^(`{3,})[a-zA-Z0-9_\-]*\r?\n", body)
         if fence_match:
+            fence_chars = fence_match.group(1)
             code_start = fence_match.end()
-            # Find the last closing ``` fence within this file section
-            last_fence_idx = body.rfind("```")
-            if last_fence_idx > code_start:
-                code_content = body[code_start:last_fence_idx].rstrip()
+            # Match closing fence on a line by itself
+            closing_pattern = rf"(?m)^{re.escape(fence_chars)}\s*$"
+            closing_matches = list(re.finditer(closing_pattern, body[code_start:]))
+            if closing_matches:
+                # Use the last closing fence match in this file section
+                last_match = closing_matches[-1]
+                code_content = body[code_start : code_start + last_match.start()].rstrip()
             else:
-                code_content = body[code_start:].rstrip()
+                # Fallback: strip any trailing fence if present
+                code_content = re.sub(r"\r?\n`{3,}\s*$", "", body[code_start:]).rstrip()
         else:
             code_content = body
 
@@ -341,6 +335,7 @@ async def write_generated_files(state: AgentState, settings: Settings) -> dict[s
     )
 
     result: dict[str, Any] = {
+        "written_files": written_files,
         "current_step": "write_files",
         "completed_steps": ["write_files"],
     }

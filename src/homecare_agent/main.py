@@ -15,15 +15,16 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import sys
 from pathlib import Path
-from typing import Optional
+from typing import Any
 
 import typer
 from rich.console import Console
 from rich.logging import RichHandler
 
 from homecare_agent.security.redaction import SecretMaskingFilter
+
+logger = logging.getLogger(__name__)
 
 app = typer.Typer(
     name="homecare-agent",

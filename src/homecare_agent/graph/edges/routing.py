@@ -103,20 +103,21 @@ def more_waves(state: AgentState, settings: Settings | None = None) -> Literal["
     current_wave = state.get("current_wave", 0)
     work_packages = state.get("work_packages", [])
 
-    # Count distinct waves
-    waves = {wp.get("wave", "") for wp in work_packages}
-    if current_wave < len(waves):
+    # Count distinct waves (matching execute_wave ordering and grouping)
+    wave_ids = sorted(list({wp.get("wave", "") for wp in work_packages}))
+    total_waves = len(wave_ids)
+    if current_wave < total_waves:
         logger.info(
             "[ROUTE:more_waves][trace_id=%s] Decision -> 'execute_wave' (wave %d of %d)",
             trace_id,
             current_wave + 1,
-            len(waves),
+            total_waves,
         )
         return "execute_wave"
     logger.info(
         "[ROUTE:more_waves][trace_id=%s] Decision -> 'run_e2e_tests' (all %d wave(s) completed)",
         trace_id,
-        len(waves),
+        total_waves,
     )
     return "run_e2e_tests"
 

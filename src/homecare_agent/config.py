@@ -12,9 +12,9 @@ from __future__ import annotations
 
 from enum import Enum
 from pathlib import Path
-from typing import Optional
+from typing import Any
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -152,8 +152,8 @@ class Settings(BaseSettings):
         description="Langfuse initial admin user email.",
     )
     langfuse_init_user_password: str = Field(
-        default="HomeCareAdmin123!",
-        description="Langfuse initial admin user password.",
+        default="",
+        description="Langfuse initial admin user password (must be configured when self-hosting Langfuse).",
     )
 
     # ─── GitHub ──────────────────────────────────────────────────────────
@@ -268,18 +268,13 @@ class Settings(BaseSettings):
             raise ValueError("OPENROUTER_API_KEY is required. Set it in .env or as an environment variable.")
         return v.strip()
 
-    @field_validator("langfuse_enabled", mode="before")
-    @classmethod
-    def auto_enable_langfuse(cls, v: Any, info: object) -> bool:
-        """Auto-enable Langfuse when both keys are provided and not explicitly disabled."""
-        if v in (False, "false", "False", "0", "no"):
-            return False
-        if v in (True, "true", "True", "1", "yes"):
-            return True
-        data = getattr(info, "data", {})
-        if data.get("langfuse_public_key") and data.get("langfuse_secret_key"):
-            return True
-        return False
+    @model_validator(mode="after")
+    def auto_enable_langfuse(self) -> Settings:
+        """Auto-enable Langfuse when both keys are provided and not explicitly set."""
+        if "langfuse_enabled" not in self.model_fields_set:
+            if self.langfuse_public_key and self.langfuse_secret_key:
+                self.langfuse_enabled = True
+        return self
 
     @property
     def effective_vision_model(self) -> str:

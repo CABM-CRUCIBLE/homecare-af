@@ -233,8 +233,9 @@ async def commit_and_push(
         if safe_to_stage:
             repo.git.add(safe_to_stage)
             try:
+                repo.index.commit(message)
                 if repo.remotes and branch_name:
-                    remote = repo.remotes.origin if "origin" in [r.name for r in repo.remotes] else repo.remotes[0]
+                    remote = next((r for r in repo.remotes if getattr(r, "name", "") == "origin"), repo.remotes[0])
                     try:
                         remote.push(branch_name)
                     except Exception as push_err:
@@ -323,7 +324,7 @@ async def create_pull_request(state: AgentState, settings: Settings, llm: Any = 
             from github import GithubIntegration
             integration = GithubIntegration(
                 integration_id=settings.github_app_id,
-                private_key=open(settings.github_app_private_key_path).read(),
+                private_key=Path(settings.github_app_private_key_path).read_text(encoding="utf-8"),
             )
             installation = integration.get_installations()[0]
             gh = installation.get_github_for_installation()

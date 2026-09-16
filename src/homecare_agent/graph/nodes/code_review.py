@@ -205,17 +205,10 @@ Fix ALL blocking and critical issues. Provide COMPLETE file contents.
             trace_metadata={"iteration": iteration, "feature_name": feature_name, "trace_id": trace_id},
         )
 
-        # Parse fixed files
-        import re
-        pattern = r"###\s*FILE:\s*(.+?)\s*\n```\w*\n(.*?)```"
-        matches = re.findall(pattern, response, re.DOTALL)
+        # Parse fixed files using standard parser
+        from homecare_agent.graph.nodes.execute_prompt import _parse_generated_files
 
-        fixed_code: dict[str, str] = {}
-        for file_path, content in matches:
-            file_path = file_path.strip()
-            content = content.strip()
-            if file_path and content:
-                fixed_code[file_path] = content
+        fixed_code = _parse_generated_files(response)
 
         logger.info(
             "[COMPLETED:apply_review_fixes][trace_id=%s] Applied fixes to %d file(s) for '%s'",

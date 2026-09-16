@@ -183,13 +183,15 @@ def launch_web_ui(settings: Any) -> None:
                     ]
 
                 step_choices = [f"Step {s['number']}: {s['name']}" for s in ORDERED_STEPS]
+                cp_choices = _get_cp_choices()
+                initial_cp_value = cp_choices[0][1] if cp_choices and len(cp_choices[0]) > 1 else None
 
                 with gr.Row():
                     with gr.Column(scale=2):
                         resume_cp_dropdown = gr.Dropdown(
                             label="Saved Checkpoint",
-                            choices=_get_cp_choices(),
-                            value=_get_cp_choices()[0][1] if _get_cp_choices() and _get_cp_choices()[0][1] else None,
+                            choices=cp_choices,
+                            value=initial_cp_value,
                         )
                         resume_step_dropdown = gr.Dropdown(
                             label="Resume From Step",
@@ -226,7 +228,13 @@ def launch_web_ui(settings: Any) -> None:
                 trace_link = f"\n\n🔗 **Langfuse Trace:** [{trace_id}]({trace_url})"
 
             code_engine = f"Local LLM (`{local_model_name}` at `{local_url}`)" if use_local else f"OpenRouter (`{getattr(settings, 'model_code', '') or 'deepseek/deepseek-coder'}`)"
-            return f"### ⏳ Pipeline Started\n**Feature:** {name}\n**Code Engine:** {code_engine}\n**Trace ID:** `{trace_id}`{trace_link}\n\nProcessing..."
+            return (
+                f"### ⏳ Pipeline Initialized\n"
+                f"**Feature:** {name}\n"
+                f"**Code Engine:** {code_engine}\n"
+                f"**Trace ID:** `{trace_id}`{trace_link}\n\n"
+                f"> **Note:** To run full automated execution with real-time terminal streaming and interactive approvals, run `homecare-agent run` via CLI."
+            )
 
         submit_btn.click(
             fn=start_pipeline,
