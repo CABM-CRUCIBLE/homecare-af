@@ -1,0 +1,26 @@
+version: '3.8'
+
+services:
+  homecare-agent:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: homecare-agent
+    ports:
+      - "7860:7860"
+    environment:
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+      - OPENROUTER_MODEL=${OPENROUTER_MODEL:-anthropic/claude-sonnet-4}
+      - MODEL_ARCHITECTURE=${MODEL_ARCHITECTURE:-anthropic/claude-sonnet-4}
+      - MODEL_CODE=${MODEL_CODE:-deepseek/deepseek-coder}
+      - MODEL_REVIEW=${MODEL_REVIEW:-anthropic/claude-sonnet-4}
+      - GITHUB_TOKEN=${GITHUB_TOKEN:-}
+      - REPO_PATH=/workspace
+      - LANGFUSE_ENABLED=${LANGFUSE_ENABLED:-false}
+      - LANGFUSE_PUBLIC_KEY=${LANGFUSE_PUBLIC_KEY:-}
+      - LANGFUSE_SECRET_KEY=${LANGFUSE_SECRET_KEY:-}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    volumes:
+      # Mount target repository into container workspace
+      - ${HOST_REPO_PATH:-.}:/workspace
+    restart: unless-stopped
