@@ -24,16 +24,22 @@ def merge_dicts(existing: dict[str, Any], new: dict[str, Any]) -> dict[str, Any]
 
 
 def append_list(existing: list[Any], new: list[Any]) -> list[Any]:
-    """Reducer that appends to a list without duplicates by 'id' key if dicts."""
+    """Reducer that appends to a list without duplicates (by 'id' for dicts, and value equality for primitives)."""
     result = list(existing)
     existing_ids = {item.get("id") for item in result if isinstance(item, dict) and "id" in item}
+    existing_primitives = {item for item in result if isinstance(item, (str, int, float, bool))}
     for item in new:
         if isinstance(item, dict) and "id" in item:
             if item["id"] not in existing_ids:
                 result.append(item)
                 existing_ids.add(item["id"])
+        elif isinstance(item, (str, int, float, bool)):
+            if item not in existing_primitives:
+                result.append(item)
+                existing_primitives.add(item)
         else:
-            result.append(item)
+            if item not in result:
+                result.append(item)
     return result
 
 

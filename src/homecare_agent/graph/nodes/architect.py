@@ -292,13 +292,14 @@ Output as a JSON array of ADR objects, each with keys:
             trace_metadata={"feature_name": feature_name, "trace_id": trace_id},
         )
 
-        # Parse ADR list
-        import json
-        adrs = []
-        json_start = response.find("[")
-        json_end = response.rfind("]") + 1
-        if json_start != -1 and json_end > json_start:
-            adrs = json.loads(response[json_start:json_end])
+        # Parse ADR list (CODEGEN-01)
+        from homecare_agent.tools.json_utils import extract_json
+
+        parsed_adrs = extract_json(response, default=None)
+        if isinstance(parsed_adrs, list):
+            adrs = parsed_adrs
+        elif isinstance(parsed_adrs, dict) and "adrs" in parsed_adrs:
+            adrs = parsed_adrs["adrs"]
         else:
             # Treat the whole response as a single ADR document
             adrs = [{"number": 1, "title": feature_name, "rendered_markdown": response}]

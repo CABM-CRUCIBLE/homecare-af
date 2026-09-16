@@ -166,13 +166,10 @@ Output as a JSON object with keys:
             trace_metadata={"feature_name": feature_name, "trace_id": trace_id},
         )
 
-        import json
-        parsed = {}
-        json_start = response.find("{")
-        json_end = response.rfind("}") + 1
-        if json_start != -1 and json_end > json_start:
-            parsed = json.loads(response[json_start:json_end])
-        else:
+        from homecare_agent.tools.json_utils import extract_json
+
+        parsed = extract_json(response, default={})
+        if not parsed:
             logger.warning("[WARN:generate_agentic_prompts][trace_id=%s] No valid JSON block found in LLM response", trace_id)
 
         waves = parsed.get("waves", [])

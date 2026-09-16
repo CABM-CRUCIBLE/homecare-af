@@ -103,8 +103,8 @@ def more_waves(state: AgentState, settings: Settings | None = None) -> Literal["
     current_wave = state.get("current_wave", 0)
     work_packages = state.get("work_packages", [])
 
-    # Count distinct waves (matching execute_wave ordering and grouping)
-    wave_ids = sorted(list({wp.get("wave", "") for wp in work_packages}))
+    # Count distinct waves (matching execute_wave ordering and grouping, filtering empty wave IDs - EDGE-01)
+    wave_ids = sorted(list({str(wp["wave"]) for wp in work_packages if wp.get("wave")}))
     total_waves = len(wave_ids)
     if current_wave < total_waves:
         logger.info(
@@ -120,6 +120,65 @@ def more_waves(state: AgentState, settings: Settings | None = None) -> Literal["
         total_waves,
     )
     return "run_e2e_tests"
+
+
+# ─── Sentinel Error-Halting Edges (ARCH-01) ──────────────────────────────────
+
+
+def check_strategy_output(state: AgentState, settings: Settings | None = None) -> Literal["generate_tactical_plan", "error_halt"]:
+    """Sentinel edge checking whether generate_strategy produced a valid strategy document (ARCH-01)."""
+    trace_id = state.get("trace_id", "no-trace")
+    strategy_doc = state.get("strategy_document", "")
+    if not strategy_doc or not strategy_doc.strip() or "Generation failed" in strategy_doc:
+        logger.critical(
+            "[ROUTE:check_strategy_output][trace_id=%s] Decision -> 'error_halt' (strategy_document missing or generation failed)",
+            trace_id,
+        )
+        return "error_halt"
+    logger.info(
+        "[ROUTE:check_strategy_output][trace_id=%s] Decision -> 'generate_tactical_plan' (strategy document verified, %d chars)",
+        trace_id,
+        len(strategy_doc),
+    )
+    return "generate_tactical_plan"
+
+
+def check_tactical_output(state: AgentState, settings: Settings | None = None) -> Literal["generate_adrs", "error_halt"]:
+    """Sentinel edge checking whether generate_tactical_plan produced valid plan and work packages (ARCH-01)."""
+    trace_id = state.get("trace_id", "no-trace")
+    tactical_plan = state.get("tactical_plan", "")
+    if not tactical_plan or not tactical_plan.strip() or "Generation failed" in tactical_plan:
+        logger.critical(
+            "[ROUTE:check_tactical_output][trace_id=%s] Decision -> 'error_halt' (tactical_plan missing or generation failed)",
+            trace_id,
+        )
+        return "error_halt"
+    work_packages = state.get("work_packages", [])
+    logger.info(
+        "[ROUTE:check_tactical_output][trace_id=%s] Decision -> 'generate_adrs' (tactical plan verified, %d WPs)",
+        trace_id,
+        len(work_packages),
+    )
+    return "generate_adrs"
+
+
+def check_prompts_output(state: AgentState, settings: Settings | None = None) -> Literal["review_architecture", "error_halt"]:
+    """Sentinel edge checking whether generate_agentic_prompts produced valid prompts and instructions (ARCH-01)."""
+    trace_id = state.get("trace_id", "no-trace")
+    standing_instructions = state.get("standing_instructions", "")
+    errors = state.get("errors", [])
+    prompt_errors = [e for e in errors if isinstance(e, dict) and e.get("step") == "generate_agentic_prompts"]
+    if prompt_errors and not standing_instructions:
+        logger.critical(
+            "[ROUTE:check_prompts_output][trace_id=%s] Decision -> 'error_halt' (prompt generation encountered unrecoverable errors)",
+            trace_id,
+        )
+        return "error_halt"
+    logger.info(
+        "[ROUTE:check_prompts_output][trace_id=%s] Decision -> 'review_architecture' (prompts verified)",
+        trace_id,
+    )
+    return "review_architecture"
 
 
 def changes_needed(state: AgentState, settings: Settings | None = None) -> Literal["apply_review_fixes", "post_review_comments"]:

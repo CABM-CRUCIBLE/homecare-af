@@ -147,6 +147,7 @@ async def test_ainvoke_attaches_trace_id_metadata() -> None:
         mock_llm.ainvoke = AsyncMock(return_value=mock_response)
         provider._llm = mock_llm
         provider._model_cache["anthropic/claude-sonnet-4"] = mock_llm
+        provider._model_cache[f"anthropic/claude-sonnet-4@{settings.openrouter_base_url}"] = mock_llm
 
         # Call with state containing same workflow trace
         state: AgentState = {

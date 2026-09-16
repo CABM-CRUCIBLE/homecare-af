@@ -148,12 +148,11 @@ Consider the healthcare enterprise context: HIPAA compliance, audit trails, RBAC
             trace_metadata={"feature_name": feature_name, "trace_id": trace_id},
         )
 
-        # Parse structured response
-        import json
-        json_start = response.find("{")
-        json_end = response.rfind("}") + 1
-        if json_start != -1 and json_end > json_start:
-            parsed = json.loads(response[json_start:json_end])
+        # Parse structured response (CODEGEN-01)
+        from homecare_agent.tools.json_utils import extract_json
+
+        parsed = extract_json(response, default={})
+        if parsed:
 
             # Populate clarification questions
             questions = parsed.get("clarification_questions", [])

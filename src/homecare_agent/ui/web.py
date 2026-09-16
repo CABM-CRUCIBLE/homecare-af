@@ -29,15 +29,16 @@ def launch_web_ui(settings: Any) -> None:
         return
 
     with gr.Blocks(
-        title="HomeCare Agentic Framework",
+        title="HomeCare Agentic Framework — Studio & Live Monitor",
         theme=gr.themes.Soft(
             primary_hue="teal",
             secondary_hue="cyan",
         ),
     ) as demo:
         gr.Markdown(
-            "# 🏥 HomeCare Agentic Code Generation Framework\n"
-            "Automated SDLC from feature request to PR — powered by LangGraph"
+            "# 🏥 HomeCare Agentic Framework — Interactive Studio & Pipeline Monitor\n"
+            "Automated SDLC from feature request to PR — powered by LangGraph\n\n"
+            "> 💡 **Execution Mode Notice:** The Web Studio provides interactive specification, model routing, and pipeline progress monitoring. Full automated execution with git pushes and PR creation is also accessible via the CLI (`homecare-agent run`)."
         )
 
         with gr.Tabs():
@@ -215,11 +216,16 @@ def launch_web_ui(settings: Any) -> None:
             use_local: bool,
             local_url: str,
             local_model_name: str,
-        ) -> str:
-            """Start the agentic pipeline."""
+        ):
+            """Start the agentic pipeline with live step progress streaming (UI-01)."""
             if not name or not desc:
-                return "### ⚠️ Error\nPlease provide both a feature name and description."
+                yield "### ⚠️ Error\nPlease provide both a feature name and description."
+                return
+
             import uuid
+            from homecare_agent.llm.provider import LLMProvider
+            from homecare_agent.graph.main_graph import compile_graph
+
             trace_id = uuid.uuid4().hex
             trace_link = ""
             if settings.langfuse_enabled:
@@ -228,13 +234,49 @@ def launch_web_ui(settings: Any) -> None:
                 trace_link = f"\n\n🔗 **Langfuse Trace:** [{trace_id}]({trace_url})"
 
             code_engine = f"Local LLM (`{local_model_name}` at `{local_url}`)" if use_local else f"OpenRouter (`{getattr(settings, 'model_code', '') or 'deepseek/deepseek-coder'}`)"
-            return (
-                f"### ⏳ Pipeline Initialized\n"
-                f"**Feature:** {name}\n"
+            
+            yield (
+                f"### 🚀 Starting Pipeline for: **{name}**\n"
                 f"**Code Engine:** {code_engine}\n"
                 f"**Trace ID:** `{trace_id}`{trace_link}\n\n"
-                f"> **Note:** To run full automated execution with real-time terminal streaming and interactive approvals, run `homecare-agent run` via CLI."
+                f"⏳ Initializing LangGraph execution..."
             )
+
+            # Build initial state
+            init_state = {
+                "trace_id": trace_id,
+                "feature_name": name,
+                "feature_description": desc,
+                "repo_path": settings.repo_path,
+                "repo_url": settings.repo_url,
+                "wireframe_paths": [f.name for f in files] if files else [],
+                "wireframe_urls": [u.strip() for u in urls.split("\n") if u.strip()],
+                "clarification_complete": True,  # Non-interactive in web
+                "current_wave": 0,
+                "review_iteration": 0,
+            }
+
+            try:
+                llm = LLMProvider(settings)
+                llm.set_workflow_trace(trace_id, trace_name=name)
+                graph = compile_graph(settings, llm)
+
+                progress_log = [f"**Trace ID:** `{trace_id}`{trace_link}\n"]
+                async for event in graph.astream(init_state):
+                    for node_name, state_update in event.items():
+                        step = state_update.get("current_step", node_name)
+                        progress_log.append(f"• ✅ **Step completed:** `{step}`")
+                        yield "### ⚙️ Pipeline Running...\n" + "\n".join(progress_log)
+
+                yield f"### 🎉 Pipeline Finished for **{name}**\n\n" + "\n".join(progress_log)
+            except Exception as err:
+                yield (
+                    f"### ⚠️ Execution Note\n"
+                    f"Pipeline session initialized with Trace ID: `{trace_id}`{trace_link}\n\n"
+                    f"**Status / Diagnostic:** {err}\n\n"
+                    f"> **CLI Automation:** For full interactive terminal prompts, git staging, and live streaming, run:\n"
+                    f"> `homecare-agent run --feature \"{name}\"`"
+                )
 
         submit_btn.click(
             fn=start_pipeline,

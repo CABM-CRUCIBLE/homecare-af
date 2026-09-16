@@ -48,6 +48,7 @@ from homecare_agent.tools.image_tools import (
     get_image_data_uri,
     get_image_metadata,
 )
+from homecare_agent.tools.json_utils import extract_json
 from homecare_agent.tools.mermaid_tools import (
     generate_er_diagram,
     generate_flowchart,
@@ -56,6 +57,7 @@ from homecare_agent.tools.mermaid_tools import (
 )
 
 __all__ = [
+    "extract_json",
     # Build
     "dotnet_build",
     "dotnet_test",

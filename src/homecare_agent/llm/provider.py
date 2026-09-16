@@ -16,6 +16,7 @@ import asyncio
 import hashlib
 import logging
 import re
+import threading
 import uuid
 from typing import Any
 
@@ -129,6 +130,7 @@ class LLMProvider:
         self._model_cache: dict[str, ChatOpenAI] = {}
         self._call_count = 0
         self._budget_lock = asyncio.Lock()
+        self._sync_budget_lock = threading.Lock()
         self._semaphore = asyncio.Semaphore(max(1, settings.max_parallel_workers))
 
         # Primary LLM (text generation)
@@ -150,7 +152,14 @@ class LLMProvider:
     @property
     def call_count(self) -> int:
         """Total number of LLM invocations executed across this provider instance."""
-        return self._call_count
+        with self._sync_budget_lock:
+            return self._call_count
+
+    def set_call_count(self, count: int) -> None:
+        """Set the current LLM call count (STATE-02), e.g. when resuming from checkpoint."""
+        with self._sync_budget_lock:
+            self._call_count = max(0, count)
+            logger.info("Restored LLM call count to %d", self._call_count)
 
     def _setup_langfuse(self) -> None:
         """Initialize Langfuse client and default callback handler."""
@@ -284,15 +293,15 @@ class LLMProvider:
         api_key: str | None = None,
         timeout: float | None = None,
     ) -> ChatOpenAI:
-        """Get or create a cached ChatOpenAI instance for the given model identifier and endpoint."""
+        """Get or create a cached ChatOpenAI instance for the given model identifier and endpoint (LLM-02)."""
         clean_model = model.strip() or self._settings.openrouter_model or "anthropic/claude-sonnet-4"
         effective_base_url = (base_url or self._settings.openrouter_base_url).strip()
         cache_key = f"{clean_model}@{effective_base_url}"
 
-        if clean_model in self._model_cache and not base_url:
-            return self._model_cache[clean_model]
         if cache_key in self._model_cache:
             return self._model_cache[cache_key]
+        if clean_model in self._model_cache:
+            return self._model_cache[clean_model]
 
         self._model_cache[cache_key] = self._create_llm(
             clean_model,
@@ -376,13 +385,14 @@ class LLMProvider:
         return self._langfuse_client
 
     def _check_and_increment_budget_sync(self) -> None:
-        """Check and increment the LLM call budget synchronously."""
-        if self._call_count >= self._settings.max_llm_calls_per_run:
-            raise LLMBudgetExceededError(
-                f"Global LLM call limit reached ({self._call_count}/{self._settings.max_llm_calls_per_run}). "
-                "Halting run to prevent runaway API spend."
-            )
-        self._call_count += 1
+        """Check and increment the LLM call budget synchronously under thread lock (LLM-01)."""
+        with self._sync_budget_lock:
+            if self._call_count >= self._settings.max_llm_calls_per_run:
+                raise LLMBudgetExceededError(
+                    f"Global LLM call limit reached ({self._call_count}/{self._settings.max_llm_calls_per_run}). "
+                    "Halting run to prevent runaway API spend."
+                )
+            self._call_count += 1
 
     async def _check_and_increment_budget_async(self) -> None:
         """Check and increment the LLM call budget under an async lock."""

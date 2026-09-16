@@ -11,10 +11,12 @@ and dynamic entry resolution to allow resuming execution from any step
 from __future__ import annotations
 
 import datetime
+import hashlib
 import json
 import logging
 from pathlib import Path
 from typing import Any
+import uuid
 
 from homecare_agent.graph.state import AgentState
 
@@ -138,6 +140,46 @@ def resolve_next_step(state: dict[str, Any], explicit_step: str | int | None = N
     return "intake_feature"
 
 
+# ─── State Pruning (ARCH-02) ─────────────────────────────────────────────
+
+
+def prune_state(
+    state: dict[str, Any] | AgentState,
+    max_errors: int = 50,
+    max_findings: int = 100,
+) -> dict[str, Any]:
+    """Prune unbounded state fields (ARCH-02) prior to checkpoint persistence.
+
+    Caps errors list to `max_errors` most recent entries.
+    Caps code_review_findings list to `max_findings` most recent entries.
+    Records count of pruned items to maintain observability.
+
+    Args:
+        state: State dictionary to prune.
+        max_errors: Maximum number of recent error records to retain.
+        max_findings: Maximum number of recent code review findings to retain.
+
+    Returns:
+        Pruned state dictionary copy.
+    """
+    pruned = dict(state)
+    errors = pruned.get("errors", [])
+    if isinstance(errors, list) and len(errors) > max_errors:
+        pruned_count = len(errors) - max_errors
+        pruned["errors"] = errors[-max_errors:]
+        pruned["_pruned_error_count"] = pruned.get("_pruned_error_count", 0) + pruned_count
+        logger.debug("[PRUNE:STATE] Pruned %d older error(s) from state", pruned_count)
+
+    findings = pruned.get("code_review_findings", [])
+    if isinstance(findings, list) and len(findings) > max_findings:
+        pruned_count = len(findings) - max_findings
+        pruned["code_review_findings"] = findings[-max_findings:]
+        pruned["_pruned_findings_count"] = pruned.get("_pruned_findings_count", 0) + pruned_count
+        logger.debug("[PRUNE:STATE] Pruned %d older review finding(s) from state", pruned_count)
+
+    return pruned
+
+
 # ─── Safe Serialization ──────────────────────────────────────────────────
 
 
@@ -180,7 +222,7 @@ class CheckpointManager:
         state: AgentState | dict[str, Any],
         last_step: str = "",
     ) -> Path:
-        """Save state to checkpoint file.
+        """Save state to checkpoint file with atomic write, SHA-256 integrity, and pruning.
 
         Args:
             trace_id: Unified workflow trace ID.
@@ -207,6 +249,13 @@ class CheckpointManager:
         if last_step:
             state_copy["last_completed_step"] = last_step
 
+        # STATE-02: Persist llm_call_count
+        llm_call_count = int(state.get("llm_call_count", 0))
+        state_copy["llm_call_count"] = llm_call_count
+
+        # ARCH-02: Apply state pruning
+        state_copy = prune_state(state_copy)
+
         checkpoint_data = {
             "version": "1.0",
             "trace_id": trace_id,
@@ -215,22 +264,36 @@ class CheckpointManager:
             "last_completed_step": last_step or state.get("last_completed_step", ""),
             "last_completed_step_number": get_step_number(last_step) if last_step else None,
             "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "llm_call_count": llm_call_count,
             "state": state_copy,
         }
 
         try:
-            temp_path = file_path.with_suffix(f".tmp_{datetime.datetime.now().timestamp()}")
-            with open(temp_path, "w", encoding="utf-8") as f:
-                json.dump(checkpoint_data, f, cls=_StateEncoder, indent=2)
+            # CP-02: Use unique UUID suffix instead of float timestamp
+            temp_path = file_path.with_suffix(f".tmp_{uuid.uuid4().hex[:8]}")
+            initial_bytes = json.dumps(checkpoint_data, cls=_StateEncoder, indent=2).encode("utf-8")
+            checksum = hashlib.sha256(initial_bytes).hexdigest()
+            checkpoint_data["checksum"] = checksum
+            final_bytes = json.dumps(checkpoint_data, cls=_StateEncoder, indent=2).encode("utf-8")
+            final_checksum = hashlib.sha256(final_bytes).hexdigest()
+
+            with open(temp_path, "wb") as f:
+                f.write(final_bytes)
             temp_path.replace(file_path)
-            logger.debug("[CHECKPOINT:SAVED] Checkpoint saved at %s for trace_id=%s (step=%s)", file_path, trace_id, last_step)
+
+            # CP-01: Write checksum sidecar file
+            checksum_path = file_path.with_suffix(".sha256")
+            with open(checksum_path, "w", encoding="utf-8") as f:
+                f.write(f"{final_checksum}  {file_path.name}\n")
+
+            logger.debug("[CHECKPOINT:SAVED] Checkpoint saved at %s for trace_id=%s (step=%s, sha256=%s)", file_path, trace_id, last_step, final_checksum[:8])
         except Exception as e:
             logger.error("[CHECKPOINT:ERROR] Failed to save checkpoint at %s: %s", file_path, e)
 
         return file_path
 
     def load_checkpoint(self, trace_id_or_path: str | Path) -> dict[str, Any]:
-        """Load checkpoint state from disk by trace ID or direct path.
+        """Load checkpoint state from disk by trace ID or direct path with integrity verification.
 
         Args:
             trace_id_or_path: Trace ID (e.g. 32-hex string) or Path to checkpoint file.
@@ -240,6 +303,7 @@ class CheckpointManager:
 
         Raises:
             FileNotFoundError: If checkpoint cannot be found.
+            ValueError: If checkpoint checksum integrity verification fails.
         """
         path = Path(trace_id_or_path)
         if not path.is_file():
@@ -254,8 +318,21 @@ class CheckpointManager:
             else:
                 raise FileNotFoundError(f"No checkpoint found for trace ID or path: {trace_id_or_path}")
 
-        with open(path, "r", encoding="utf-8") as f:
-            data = json.load(f)
+        # CP-01: Read bytes and verify checksum against sidecar if present
+        with open(path, "rb") as f:
+            raw_bytes = f.read()
+
+        computed_sha = hashlib.sha256(raw_bytes).hexdigest()
+        checksum_path = path.with_suffix(".sha256")
+        if checksum_path.is_file():
+            expected_sha = checksum_path.read_text(encoding="utf-8").strip().split()[0]
+            if expected_sha and computed_sha != expected_sha:
+                raise ValueError(
+                    f"Checkpoint integrity verification failed for {path}: "
+                    f"expected {expected_sha}, computed {computed_sha}"
+                )
+
+        data = json.loads(raw_bytes.decode("utf-8"))
 
         logger.info("[CHECKPOINT:LOADED] Loaded checkpoint from %s (trace_id=%s)", path, data.get("trace_id"))
         return data

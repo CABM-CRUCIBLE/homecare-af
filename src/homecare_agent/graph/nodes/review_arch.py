@@ -145,13 +145,13 @@ At the very end of your response, output a structured verdict code block:
         approved = False
         verdict_match = re.search(r"```verdict\s*(\{.*?\})\s*```", response, re.DOTALL)
         if verdict_match:
-            try:
-                verdict_data = json.loads(verdict_match.group(1))
+            from homecare_agent.tools.json_utils import extract_json
+            verdict_data = extract_json(verdict_match.group(1), default={})
+            if verdict_data:
                 v = str(verdict_data.get("verdict", "")).upper()
                 has_blocking = bool(verdict_data.get("has_blocking_findings", False))
                 approved = v in ("APPROVED", "APPROVED_WITH_OBSERVATIONS") and not has_blocking
-            except Exception as parse_err:
-                logger.debug("Failed to parse verdict JSON block: %s", parse_err)
+            else:
                 verdict_match = None
 
         if not verdict_match:
@@ -201,4 +201,63 @@ At the very end of your response, output a structured verdict code block:
             "errors": [{"step": "review_architecture", "trace_id": trace_id, "message": f"Architecture review failed: {e}"}],
             "current_step": "review_architecture",
             "completed_steps": ["review_architecture"],
+        }
+
+
+async def revise_architecture(state: AgentState, settings: Settings, llm: LLMProvider) -> dict[str, Any]:
+    """Revise architecture based on review findings (extracted from main_graph.py - ARCH-03)."""
+    trace_id = state.get("trace_id", "no-trace")
+    feature_name = state.get("feature_name", "Unknown")
+    logger.info("[START:revise_architecture][trace_id=%s] Revising architecture for '%s'...", trace_id, feature_name)
+
+    review = state.get("architecture_review", "")
+
+    revision_prompt = f"""The architecture review found issues that need to be addressed.
+
+**Review Findings:**
+{review[:10000]}
+
+**Current Strategy:**
+{state.get("strategy_document", "")[:10000]}
+
+Revise the Strategy and Tactical Plan to address ALL blocking and critical findings.
+Output the revised Strategy document.
+"""
+
+    try:
+        response = await llm.ainvoke(
+            prompt=revision_prompt,
+            system_prompt="You are a Senior Solution Architect revising an architecture proposal based on review feedback.",
+            node_name="revise_architecture",
+            state_overrides=state,
+            trace_name="revise_architecture",
+            trace_metadata={"feature_name": feature_name, "trace_id": trace_id},
+        )
+        logger.info(
+            "[COMPLETED:revise_architecture][trace_id=%s] Architecture revised successfully (%d chars)",
+            trace_id,
+            len(response),
+        )
+        arch_iteration = state.get("arch_iteration", 0) + 1
+        return {
+            "strategy_document": response,
+            "arch_iteration": arch_iteration,
+            "current_step": "revise_architecture",
+            "completed_steps": ["revise_architecture"],
+        }
+    except Exception as e:
+        logger.error(
+            "[ERROR:revise_architecture][trace_id=%s] Architecture revision failed for '%s': %s",
+            trace_id,
+            feature_name,
+            e,
+            exc_info=True,
+        )
+        arch_iteration = state.get("arch_iteration", 0) + 1
+        return {
+            "architecture_approved": False,  # Fail-safe: do not approve unrevised architecture on failure
+            "arch_iteration": arch_iteration,
+            "errors": [{"step": "revise_architecture", "trace_id": trace_id, "message": f"Architecture revision failed: {e}"}],
+            "current_step": "revise_architecture",
+            "completed_steps": ["revise_architecture"],
         }

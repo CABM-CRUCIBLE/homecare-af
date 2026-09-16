@@ -57,11 +57,12 @@ async def execute_wave(state: AgentState, settings: Settings, llm: LLMProvider) 
     work_packages = state.get("work_packages", [])
     standing_instructions = state.get("standing_instructions", "")
 
-    # Group WPs by wave
+    # Group WPs by wave (filtering empty wave IDs - EDGE-01)
     waves: dict[str, list[dict[str, Any]]] = {}
     for wp in work_packages:
-        wave_id = wp.get("wave", "")
-        waves.setdefault(wave_id, []).append(wp)
+        wave_id = str(wp.get("wave", "")).strip()
+        if wave_id:
+            waves.setdefault(wave_id, []).append(wp)
 
     wave_ids = sorted(waves.keys())
     if current_wave >= len(wave_ids):

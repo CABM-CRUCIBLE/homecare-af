@@ -342,6 +342,11 @@ def _execute_resume(
     llm = LLMProvider(settings)
     llm.set_workflow_trace(trace_id, trace_name=feature_name)
 
+    # Restore prior LLM call count from checkpoint state (STATE-02)
+    saved_calls = int(saved_state.get("llm_call_count", 0))
+    if saved_calls > 0:
+        llm.set_call_count(saved_calls)
+
     if settings.langfuse_enabled:
         project_id = getattr(settings, "langfuse_init_project_id", "homecare")
         console.print(f"[dim]Langfuse Trace: {settings.langfuse_host.rstrip('/')}/project/{project_id}/traces/{trace_id}[/dim]\n")
@@ -403,8 +408,10 @@ async def _run_pipeline(graph: object, initial_state: dict, trace_id: str = "", 
             display_step_progress(step, "completed")
             final_state.update(state_update)
 
-            # Auto-save checkpoint after each completed node
+            # Auto-save checkpoint after each completed node (STATE-02)
             if trace_id:
+                if llm is not None:
+                    final_state["llm_call_count"] = getattr(llm, "call_count", 0)
                 try:
                     checkpoint_mgr.save_checkpoint(trace_id, final_state, last_step=step)
                 except Exception as e:

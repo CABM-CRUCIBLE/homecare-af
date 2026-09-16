@@ -37,7 +37,7 @@ services:
     ports:
       - "127.0.0.1:13000:3000"
     environment:
-      - DATABASE_URL=postgresql://postgres:postgres@langfuse-db:5432/langfuse
+      - DATABASE_URL=postgresql://${LANGFUSE_DB_USER:-postgres}:${LANGFUSE_DB_PASSWORD:-postgres}@langfuse-db:5432/${LANGFUSE_DB_NAME:-langfuse}
       - NEXTAUTH_URL=http://localhost:13000
       - NEXTAUTH_SECRET=${NEXTAUTH_SECRET:-changeme-nextauth-secret-32-chars-min}
       - SALT=${SALT:-changeme-salt-min-16-chars}
@@ -60,15 +60,15 @@ services:
     image: postgres:16-alpine
     container_name: langfuse-db
     environment:
-      - POSTGRES_USER=postgres
-      - POSTGRES_PASSWORD=postgres
-      - POSTGRES_DB=langfuse
+      - POSTGRES_USER=${LANGFUSE_DB_USER:-postgres}
+      - POSTGRES_PASSWORD=${LANGFUSE_DB_PASSWORD:-postgres}
+      - POSTGRES_DB=${LANGFUSE_DB_NAME:-langfuse}
     volumes:
       - langfuse_db_data:/var/lib/postgresql/data
     ports:
       - "127.0.0.1:${LANGFUSE_DB_PORT:-15432}:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d langfuse"]
+      test: ["CMD-SHELL", "pg_isready -U ${LANGFUSE_DB_USER:-postgres} -d ${LANGFUSE_DB_NAME:-langfuse}"]
       interval: 5s
       timeout: 5s
       retries: 5

@@ -143,11 +143,10 @@ Output as structured JSON with keys:
             trace_metadata={"repo_path": str(repo_path), "feature_name": feature_name, "trace_id": trace_id},
         )
 
-        import json
-        json_start = response.find("{")
-        json_end = response.rfind("}") + 1
-        if json_start != -1 and json_end > json_start:
-            parsed = json.loads(response[json_start:json_end])
+        from homecare_agent.tools.json_utils import extract_json
+
+        parsed = extract_json(response, default=None)
+        if parsed and isinstance(parsed, dict):
             updates["codebase_analysis"] = parsed
             updates["existing_patterns"] = parsed.get("architecture_patterns", {})
             logger.info(
