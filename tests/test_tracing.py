@@ -112,6 +112,8 @@ def test_llm_provider_get_langfuse_handler_when_enabled() -> None:
         assert handler == mock_instance
         mock_handler_cls.assert_called_with(
             public_key="pk-lf-test",
+            secret_key="sk-lf-test",
+            host="http://localhost:13000",
             trace_context={"trace_id": trace_id},
         )
 

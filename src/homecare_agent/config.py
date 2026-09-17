@@ -231,6 +231,10 @@ class Settings(BaseSettings):
         default=7860,
         description="Port for the Gradio web UI.",
     )
+    gradio_server_name: str = Field(
+        default="127.0.0.1",
+        description="Host/IP Gradio binds to. Set to '0.0.0.0' inside Docker so the port mapping works.",
+    )
     gradio_auth_user: str = Field(
         default="",
         description="Optional basic auth username for the Gradio Web UI.",

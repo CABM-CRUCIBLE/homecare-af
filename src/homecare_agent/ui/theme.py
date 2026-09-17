@@ -154,6 +154,9 @@ html, body {
   background-color: var(--bg-deep) !important;
   margin: 0 !important;
   padding: 0 !important;
+  min-height: 100vh !important;
+  overflow-y: auto !important;
+  overflow-x: hidden !important;
 }
 
 .gradio-container {
@@ -163,6 +166,10 @@ html, body {
   font-family: var(--font-main) !important;
   padding: 14px 24px 46px 24px !important;
   box-sizing: border-box !important;
+  min-height: 100vh !important;
+  width: 100% !important;
+  max-width: 100% !important;
+  overflow-y: visible !important;
 }
 
 /* ==========================================================================
@@ -1221,3 +1228,288 @@ def get_theme_bundle(theme_name: str = "crucible") -> tuple[gr.Theme, str, str]:
 def list_available_themes() -> list[tuple[str, str]]:
     """List available themes as (label, key) tuples for UI dropdowns."""
     return [(v["name"], k) for k, v in THEMES.items()]
+
+
+CRUCIBLE_LOGIN_CSS = """
+<style id="crucible-login-theme-css">
+  @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
+
+  :root {
+    --bg-deep: #080c14;
+    --card-surface: rgba(15, 23, 42, 0.88);
+    --card-border: rgba(148, 163, 184, 0.22);
+    --input-bg: rgba(11, 18, 34, 0.95);
+    --input-border: rgba(148, 163, 184, 0.28);
+    --cyan-primary: #38bdf8;
+    --cyan-glow: rgba(56, 189, 248, 0.28);
+  }
+
+  /* Scoped exclusively to the unauthenticated login screen */
+  html.crucible-login-page,
+  html.crucible-login-page body {
+    background-color: var(--bg-deep) !important;
+    background: radial-gradient(circle at 50% 28%, rgba(56, 189, 248, 0.12) 0%, rgba(8, 12, 20, 1) 75%) !important;
+    color: #f8fafc !important;
+    font-family: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif !important;
+    min-height: 100vh !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    overflow-y: auto !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+  }
+
+  /* Full viewport centering container on login page only */
+  html.crucible-login-page gradio-app,
+  html.crucible-login-page .gradio-container {
+    background: transparent !important;
+    background-color: transparent !important;
+    min-height: 100vh !important;
+    width: 100% !important;
+    margin: 0 !important;
+    padding: 20px 0 !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+  }
+
+  /* Eradicate the stark white bar / background */
+  html.crucible-login-page .wrap,
+  html.crucible-login-page div[class*="wrap"] {
+    background: transparent !important;
+    background-color: transparent !important;
+    box-shadow: none !important;
+    border: none !important;
+    width: 100% !important;
+    max-width: 440px !important;
+    margin: 0 auto !important;
+    padding: 24px !important;
+    display: flex !important;
+    flex-direction: column !important;
+    align-items: center !important;
+    justify-content: center !important;
+  }
+
+  /* Executive Glassmorphism Login Card */
+  html.crucible-login-page .wrap > div,
+  html.crucible-login-page .wrap .panel,
+  html.crucible-login-page div[class*="panel"] {
+    background: var(--card-surface) !important;
+    backdrop-filter: blur(28px) saturate(190%) !important;
+    -webkit-backdrop-filter: blur(28px) saturate(190%) !important;
+    border: 1px solid var(--card-border) !important;
+    border-radius: 24px !important;
+    box-shadow: 0 30px 70px -10px rgba(0, 0, 0, 0.85), 0 0 45px rgba(56, 189, 248, 0.15) !important;
+    padding: 40px 36px !important;
+    width: 100% !important;
+    max-width: 440px !important;
+    box-sizing: border-box !important;
+    position: relative !important;
+  }
+
+  /* Hide plain browser default H2 */
+  html.crucible-login-page .wrap h2,
+  html.crucible-login-page div[class*="panel"] h2 {
+    display: none !important;
+  }
+
+  /* Executive Brand Header */
+  .crucible-brand-header {
+    text-align: center;
+    margin-bottom: 26px;
+  }
+
+  .crucible-brand-header .brand-icon-wrap {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 54px;
+    height: 54px;
+    border-radius: 16px;
+    background: linear-gradient(135deg, rgba(56, 189, 248, 0.2) 0%, rgba(2, 132, 199, 0.35) 100%);
+    border: 1px solid rgba(56, 189, 248, 0.5);
+    box-shadow: 0 0 24px rgba(56, 189, 248, 0.3);
+    margin-bottom: 12px;
+  }
+
+  .crucible-brand-header .brand-icon {
+    font-size: 28px;
+    line-height: 1;
+  }
+
+  .crucible-brand-header .brand-title {
+    font-size: 1.55rem;
+    font-weight: 800;
+    letter-spacing: 0.06em;
+    background: linear-gradient(135deg, #ffffff 0%, #38bdf8 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    margin: 0 0 4px 0;
+    text-transform: uppercase;
+  }
+
+  .crucible-brand-header .brand-subtitle {
+    font-size: 0.85rem;
+    color: #94a3b8;
+    margin: 0;
+    letter-spacing: 0.02em;
+    font-weight: 500;
+  }
+
+  .crucible-brand-header .brand-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: rgba(56, 189, 248, 0.08);
+    border: 1px solid rgba(56, 189, 248, 0.22);
+    border-radius: 9999px;
+    padding: 4px 12px;
+    font-size: 0.72rem;
+    color: #7dd3fc;
+    font-weight: 600;
+    letter-spacing: 0.03em;
+    margin-top: 10px;
+  }
+
+  /* Form Labels */
+  html.crucible-login-page .wrap label,
+  html.crucible-login-page div[class*="panel"] label {
+    margin-bottom: 16px !important;
+    display: block !important;
+  }
+
+  html.crucible-login-page .wrap label span,
+  html.crucible-login-page div[class*="panel"] label span {
+    color: #cbd5e1 !important;
+    font-size: 0.82rem !important;
+    font-weight: 600 !important;
+    text-transform: uppercase !important;
+    letter-spacing: 0.05em !important;
+    margin-bottom: 6px !important;
+    display: block !important;
+  }
+
+  /* Inputs */
+  html.crucible-login-page .wrap input[type="text"],
+  html.crucible-login-page .wrap input[type="password"],
+  html.crucible-login-page div[class*="panel"] input {
+    background: var(--input-bg) !important;
+    background-color: var(--input-bg) !important;
+    border: 1.5px solid var(--input-border) !important;
+    border-radius: 12px !important;
+    color: #ffffff !important;
+    font-family: 'Plus Jakarta Sans', sans-serif !important;
+    font-size: 0.95rem !important;
+    padding: 12px 16px !important;
+    width: 100% !important;
+    box-sizing: border-box !important;
+    transition: all 0.2s ease !important;
+  }
+
+  html.crucible-login-page .wrap input[type="text"]:focus,
+  html.crucible-login-page .wrap input[type="password"]:focus,
+  html.crucible-login-page div[class*="panel"] input:focus {
+    border-color: var(--cyan-primary) !important;
+    box-shadow: 0 0 0 3px var(--cyan-glow) !important;
+    outline: none !important;
+  }
+
+  /* Submit Button */
+  html.crucible-login-page .wrap button.primary,
+  html.crucible-login-page .wrap button[type="submit"],
+  html.crucible-login-page div[class*="panel"] button {
+    background: linear-gradient(135deg, #0284c7 0%, #0369a1 100%) !important;
+    border: 1px solid rgba(56, 189, 248, 0.5) !important;
+    border-radius: 12px !important;
+    color: #ffffff !important;
+    font-family: 'Plus Jakarta Sans', sans-serif !important;
+    font-weight: 700 !important;
+    font-size: 0.95rem !important;
+    letter-spacing: 0.05em !important;
+    text-transform: uppercase !important;
+    padding: 14px 20px !important;
+    width: 100% !important;
+    margin-top: 14px !important;
+    cursor: pointer !important;
+    box-shadow: 0 4px 20px rgba(2, 132, 199, 0.4) !important;
+    transition: all 0.2s ease !important;
+  }
+
+  html.crucible-login-page .wrap button.primary:hover,
+  html.crucible-login-page .wrap button[type="submit"]:hover,
+  html.crucible-login-page div[class*="panel"] button:hover {
+    background: linear-gradient(135deg, #0369a1 0%, #0284c7 100%) !important;
+    box-shadow: 0 6px 28px rgba(56, 189, 248, 0.55) !important;
+    transform: translateY(-1px) !important;
+  }
+
+  /* Incorrect Credentials Warning */
+  html.crucible-login-page .creds,
+  html.crucible-login-page p[class*="creds"] {
+    background: rgba(239, 68, 68, 0.15) !important;
+    border: 1px solid rgba(239, 68, 68, 0.35) !important;
+    border-radius: 10px !important;
+    color: #fca5a5 !important;
+    padding: 10px 14px !important;
+    text-align: center !important;
+    font-size: 0.88rem !important;
+    font-weight: 600 !important;
+    margin: 12px 0 !important;
+  }
+</style>
+
+<script>
+  // Ensure dark mode class is applied immediately
+  document.documentElement.classList.add('dark');
+  document.documentElement.classList.add('crucible-login-page');
+  if (document.body) document.body.classList.add('dark');
+
+  // Inject the Executive Brand Header into the login card once DOM is ready
+  function mountCrucibleBrand() {
+    const wrap = document.querySelector('.wrap') || document.querySelector('div[class*="wrap"]');
+    if (!wrap) return false;
+    
+    // Find panel container
+    const panel = wrap.querySelector('.panel') || wrap.querySelector('div[class*="panel"]') || wrap.firstElementChild;
+    if (!panel || panel.querySelector('.crucible-brand-header')) return false;
+
+    const brandEl = document.createElement('div');
+    brandEl.className = 'crucible-brand-header';
+    brandEl.innerHTML = `
+      <div class="brand-icon-wrap">
+        <span class="brand-icon">⚗️</span>
+      </div>
+      <h1 class="brand-title">Crucible</h1>
+      <p class="brand-subtitle">Autonomous Agentic Framework</p>
+      <div class="brand-badge">
+        <span>🔒</span>
+        <span>Security Clearance Required</span>
+      </div>
+    `;
+
+    panel.insertBefore(brandEl, panel.firstChild);
+    return true;
+  }
+
+  // Poll until Svelte mounts the login card
+  const brandInterval = setInterval(() => {
+    if (mountCrucibleBrand()) {
+      clearInterval(brandInterval);
+    }
+  }, 30);
+  setTimeout(() => clearInterval(brandInterval), 5000);
+</script>
+"""
+
+
+def inject_crucible_login_theme(html: str) -> str:
+    """Inject high-contrast, executive Crucible dark theme into unauthenticated login page."""
+    html = html.replace('<html\n\tlang="en"', '<html\n\tlang="en" class="dark crucible-login-page"')
+    html = html.replace('<html lang="en"', '<html lang="en" class="dark crucible-login-page"')
+    html = html.replace('--bg: white;', '--bg: #080c14;')
+    html = html.replace('--col:   #1f2937;', '--col: #f8fafc;')
+    html = html.replace('--bg-dark: #0b0f19;', '--bg-dark: #080c14;')
+    html = html.replace('--col-dark: #f3f4f6;', '--col-dark: #f8fafc;')
+    return html.replace("</head>", CRUCIBLE_LOGIN_CSS + "</head>")
+

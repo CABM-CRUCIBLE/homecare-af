@@ -13,7 +13,10 @@ dependencies = [
     "langchain-core>=0.3",
     "langchain-community>=0.3",
     # === Observability ===
-    "langfuse>=3.0",
+    # Pin langfuse to >=2.60.0,<3.0.0 to match the Langfuse v2 self-hosted server in docker-compose.
+    "langfuse>=2.60.0,<3.0.0",
+    # langchain <1.0 preserves BaseCallbackHandler compatibility
+    "langchain>=0.3,<1.0",
     # === GitHub & Git ===
     "PyGithub>=2.0",
     "GitPython>=3.1",

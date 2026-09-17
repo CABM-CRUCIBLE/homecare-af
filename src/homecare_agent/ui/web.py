@@ -19,7 +19,11 @@ from typing import Any
 
 import gradio as gr
 
-from homecare_agent.ui.theme import get_theme_bundle, list_available_themes
+from homecare_agent.ui.theme import (
+    get_theme_bundle,
+    inject_crucible_login_theme,
+    list_available_themes,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -435,10 +439,29 @@ def create_web_ui(settings: Any) -> gr.Blocks:
                 graph = compile_graph(settings, llm)
 
                 progress_log = [f"**Trace ID:** `{trace_id}`{trace_link}\n"]
+                halted = False
+                all_errors: list[Any] = []
                 async for event in graph.astream(init_state):
                     for node_name, state_update in event.items():
                         step = state_update.get("current_step", node_name)
-                        progress_log.append(f"• ✅ **Step completed:** `{step}`")
+                        step_errors = state_update.get("errors", [])
+                        if step_errors:
+                            all_errors.extend(step_errors)
+
+                        if node_name == "error_halt" or step == "error_halt":
+                            halted = True
+                            progress_log.append(f"• 🛑 **Pipeline Halted:** Critical step failed")
+                            if all_errors:
+                                for err_item in all_errors[-5:]:
+                                    if isinstance(err_item, dict):
+                                        st = err_item.get("step", "general")
+                                        msg = err_item.get("message", "Unknown error")
+                                        progress_log.append(f"    ⚠️ `[{st}]`: {msg}")
+                                    else:
+                                        progress_log.append(f"    ⚠️ {err_item}")
+                        else:
+                            progress_log.append(f"• ✅ **Step completed:** `{step}`")
+
                         if node_name == "create_branch" or step == "create_branch":
                             arch_dir = state_update.get("arch_docs_dir")
                             written = state_update.get("written_arch_files", [])
@@ -450,7 +473,12 @@ def create_web_ui(settings: Any) -> gr.Blocks:
                                 progress_log.append(f"  📝 *QA Testing Guide committed:* `{doc_files[0]}`")
                         yield "### ⚙️ Pipeline Running...\n" + "\n".join(progress_log)
 
-                yield f"### 🎉 Pipeline Finished for **{name}**\n\n" + "\n".join(progress_log)
+                llm.flush()
+
+                if halted:
+                    yield f"### 🛑 Pipeline Halted (Circuit Breaker Tripped)\n\n" + "\n".join(progress_log)
+                else:
+                    yield f"### 🎉 Pipeline Finished for **{name}**\n\n" + "\n".join(progress_log)
             except Exception as err:
                 yield (
                     f"### ⚠️ Execution Note\n"
@@ -533,17 +561,57 @@ def launch_web_ui(settings: Any) -> None:
     port = settings.web_ui_port if hasattr(settings, "web_ui_port") else 7860
     server_name = getattr(settings, "gradio_server_name", "127.0.0.1") or "127.0.0.1"
     auth = None
+    _app = None
+
     if getattr(settings, "gradio_auth_user", "") and getattr(settings, "gradio_auth_password", ""):
         auth = (settings.gradio_auth_user, settings.gradio_auth_password)
         logger.info("Gradio Web UI basic authentication enabled for user '%s'", settings.gradio_auth_user)
 
+        # Inject Crucible Executive Glassmorphism login screen middleware
+        try:
+            from fastapi import Request
+            from gradio.routes import App
+            from starlette.middleware.base import BaseHTTPMiddleware
+            from starlette.responses import Response
+
+            _app = App()
+
+            class CrucibleLoginMiddleware(BaseHTTPMiddleware):
+                async def dispatch(self, request: Request, call_next):
+                    response = await call_next(request)
+                    content_type = response.headers.get("content-type", "")
+                    if "text/html" in content_type:
+                        body = b""
+                        async for chunk in response.body_iterator:
+                            body += chunk
+                        html = body.decode("utf-8")
+                        if '"auth_required":true' in html or '"auth_required": true' in html:
+                            html = inject_crucible_login_theme(html)
+                        headers = dict(response.headers)
+                        headers.pop("content-length", None)
+                        return Response(
+                            content=html,
+                            status_code=response.status_code,
+                            headers=headers,
+                            media_type=response.media_type,
+                        )
+                    return response
+
+            _app.add_middleware(CrucibleLoginMiddleware)
+        except Exception as middleware_err:
+            logger.warning("Could not attach CrucibleLoginMiddleware: %s", middleware_err)
+
     logger.info("Launching Gradio Web UI (%s) on %s:%d...", theme_name, server_name, port)
-    demo.launch(
-        server_name=server_name,
-        server_port=port,
-        share=False,
-        auth=auth,
-        theme=theme_obj,
-        css=custom_css,
-        head=head_html,
-    )
+    launch_kwargs: dict[str, Any] = {
+        "server_name": server_name,
+        "server_port": port,
+        "share": False,
+        "auth": auth,
+        "theme": theme_obj,
+        "css": custom_css,
+        "head": head_html,
+    }
+    if _app is not None:
+        launch_kwargs["_app"] = _app
+
+    demo.launch(**launch_kwargs)

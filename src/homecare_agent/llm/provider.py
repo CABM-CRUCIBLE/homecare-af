@@ -177,9 +177,21 @@ class LLMProvider:
             except ImportError:
                 from langfuse.callback import CallbackHandler as LangfuseCallbackHandler  # type: ignore[no-redef]
 
-            self._langfuse_handler = LangfuseCallbackHandler(
-                public_key=self._settings.langfuse_public_key,
-            )
+            setup_kwargs: dict[str, Any] = {
+                "public_key": self._settings.langfuse_public_key,
+                "secret_key": self._settings.langfuse_secret_key,
+                "host": self._settings.langfuse_host,
+            }
+            try:
+                import inspect
+                sig = inspect.signature(LangfuseCallbackHandler.__init__)
+                has_kwargs = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values())
+                if not has_kwargs:
+                    setup_kwargs = {k: v for k, v in setup_kwargs.items() if k in sig.parameters}
+            except Exception:
+                pass
+
+            self._langfuse_handler = LangfuseCallbackHandler(**setup_kwargs)
             self._callback_manager = CallbackManager([self._langfuse_handler])
             logger.info("Langfuse tracing enabled at %s", self._settings.langfuse_host)
         except ImportError:
@@ -238,16 +250,58 @@ class LLMProvider:
                 except ImportError:
                     from langfuse.callback import CallbackHandler as LangfuseCallbackHandler  # type: ignore[no-redef]
 
-                handler = LangfuseCallbackHandler(
-                    public_key=self._settings.langfuse_public_key,
-                    trace_context={"trace_id": norm_id},
-                )
+                handler_kwargs: dict[str, Any] = {
+                    "public_key": self._settings.langfuse_public_key,
+                    "secret_key": self._settings.langfuse_secret_key,
+                    "host": self._settings.langfuse_host,
+                    "trace_context": {"trace_id": norm_id},
+                }
+
+                try:
+                    import inspect
+                    sig = inspect.signature(LangfuseCallbackHandler.__init__)
+                    has_kwargs = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values())
+                    if not has_kwargs:
+                        handler_kwargs = {k: v for k, v in handler_kwargs.items() if k in sig.parameters}
+                        if "stateful_client" in sig.parameters and self._langfuse_client:
+                            try:
+                                handler_kwargs["stateful_client"] = self._langfuse_client.trace(
+                                    id=norm_id,
+                                    name=self._workflow_trace_name or f"workflow_{norm_id[:8]}",
+                                )
+                            except Exception:
+                                pass
+                        elif "session_id" in sig.parameters and "session_id" not in handler_kwargs:
+                            handler_kwargs["session_id"] = norm_id
+                except Exception:
+                    pass
+
+                handler = LangfuseCallbackHandler(**handler_kwargs)
                 self._active_handlers[norm_id] = handler
             except Exception:
                 logger.exception("Failed to create LangfuseCallbackHandler for trace %s", norm_id)
                 return self._langfuse_handler
 
         return self._active_handlers[norm_id]
+
+    def flush(self) -> None:
+        """Flush any pending Langfuse events and active handlers."""
+        if self._langfuse_client and hasattr(self._langfuse_client, "flush"):
+            try:
+                self._langfuse_client.flush()
+            except Exception:
+                pass
+        for handler in list(self._active_handlers.values()):
+            if hasattr(handler, "flush"):
+                try:
+                    handler.flush()
+                except Exception:
+                    pass
+        if self._langfuse_handler and hasattr(self._langfuse_handler, "flush"):
+            try:
+                self._langfuse_handler.flush()
+            except Exception:
+                pass
 
     def _create_llm(
         self,
@@ -270,6 +324,10 @@ class LLMProvider:
         effective_base_url = (base_url or self._settings.openrouter_base_url).strip()
         effective_api_key = (api_key or self._settings.openrouter_api_key).strip()
 
+        # OpenAI SDK v3 (langchain-openai ≥ 1.4) moved custom HTTP headers from
+        # model_kwargs["headers"] to the dedicated default_headers= constructor
+        # parameter.  Passing them via model_kwargs causes:
+        #   TypeError: AsyncCompletions.create() got an unexpected keyword argument 'headers'
         kwargs: dict[str, Any] = {
             "openai_api_key": effective_api_key,
             "openai_api_base": effective_base_url,
@@ -277,11 +335,9 @@ class LLMProvider:
             "max_tokens": self._settings.max_tokens,
             "temperature": self._settings.temperature,
             "request_timeout": timeout or 300.0,
-            "model_kwargs": {
-                "headers": {
-                    "HTTP-Referer": "https://homecare-agent.local",
-                    "X-Title": "HomeCare Agentic Framework",
-                },
+            "default_headers": {
+                "HTTP-Referer": "https://homecare-agent.local",
+                "X-Title": "HomeCare Agentic Framework",
             },
         }
         return ChatOpenAI(**kwargs)

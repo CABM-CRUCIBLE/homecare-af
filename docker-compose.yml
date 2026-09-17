@@ -20,6 +20,8 @@ services:
       - LANGFUSE_SECRET_KEY=${LANGFUSE_SECRET_KEY:-sk-lf-homecare-local}
       - LANGFUSE_HOST=http://langfuse-server:3000
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      # Bind Gradio to all interfaces so Docker port mapping (127.0.0.1:7860->7860) works
+      - GRADIO_SERVER_NAME=0.0.0.0
     volumes:
       # Mount target repository into container workspace
       - ${HOST_REPO_PATH:-.}:/workspace
