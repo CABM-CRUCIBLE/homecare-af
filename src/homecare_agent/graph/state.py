@@ -91,6 +91,10 @@ class AgentState(TypedDict, total=False):
     architecture_review: str
     architecture_approved: bool
     arch_iteration: int
+    arch_docs_dir: str
+    written_arch_files: Annotated[list[str], append_list]
+    manual_test_doc: str
+    written_doc_files: Annotated[list[str], append_list]
 
     # ─── Agentic Prompts ─────────────────────────────────────────────────
     standing_instructions: str

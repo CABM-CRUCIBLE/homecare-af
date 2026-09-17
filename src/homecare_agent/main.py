@@ -428,11 +428,15 @@ async def _run_pipeline(graph: object, initial_state: dict, trace_id: str = "", 
 @app.command()
 def web(
     port: int = typer.Option(7860, "--port", "-p", help="Web UI port"),
+    theme: str = typer.Option("", "--theme", "-t", help="Web UI theme: 'crucible' (Executive Glassmorphism), 'soft', 'default'"),
     log_level: str = typer.Option("", "--log-level", "-l", help="Logging level"),
 ) -> None:
     """Launch the Gradio web interface."""
     from homecare_agent.config import get_settings
-    settings = get_settings()
+    overrides = {}
+    if theme:
+        overrides["ui_theme"] = theme
+    settings = get_settings(**overrides)
     settings.web_ui_port = port  # type: ignore[assignment]
     _setup_logging(log_level or settings.log_level, settings.log_file)
 

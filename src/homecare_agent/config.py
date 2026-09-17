@@ -239,6 +239,10 @@ class Settings(BaseSettings):
         default="",
         description="Optional basic auth password for the Gradio Web UI.",
     )
+    ui_theme: str = Field(
+        default="crucible",
+        description="Web UI theme: 'crucible' (Executive Glassmorphism), 'soft', 'default'.",
+    )
 
     # ─── Logging ─────────────────────────────────────────────────────────
     log_level: str = Field(

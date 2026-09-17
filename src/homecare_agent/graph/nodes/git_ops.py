@@ -124,7 +124,28 @@ async def create_branch(state: AgentState, settings: Settings) -> dict[str, Any]
             new_branch = repo.create_head(branch_name)
             new_branch.checkout()
 
-        # Push to remote
+        # Persist architecture documents and visual resources immediately (ARCH-PERSIST)
+        from homecare_agent.graph.nodes.documentation import (
+            get_feature_docs_dir,
+            save_architecture_documents,
+        )
+
+        arch_files = save_architecture_documents(state, settings)
+        if arch_files:
+            try:
+                repo.git.add(arch_files)
+                commit_msg = f"docs(architecture): add strategy, tactical plan, ADRs, and visual resources for {feature_name}"
+                repo.index.commit(commit_msg)
+                logger.info(
+                    "[create_branch][trace_id=%s] Committed %d architecture file(s) on branch '%s'",
+                    trace_id,
+                    len(arch_files),
+                    branch_name,
+                )
+            except Exception as commit_err:
+                logger.warning("[create_branch][trace_id=%s] Architecture commit note: %s", trace_id, commit_err)
+
+        # Push to remote (pushes branch and initial architecture commit)
         if target_remote:
             try:
                 target_remote.push(branch_name, set_upstream=True)
@@ -132,14 +153,20 @@ async def create_branch(state: AgentState, settings: Settings) -> dict[str, Any]
             except Exception as push_err:
                 logger.warning("[create_branch][trace_id=%s] Remote push skipped or failed: %s", trace_id, push_err)
 
+        arch_dir_rel = str(get_feature_docs_dir(repo_path, feature_name).relative_to(Path(repo_path))).replace("\\", "/")
+
         logger.info(
-            "[COMPLETED:create_branch][trace_id=%s] Branch '%s' successfully checked out and configured",
+            "[COMPLETED:create_branch][trace_id=%s] Branch '%s' successfully checked out with %d architecture doc(s) in %s",
             trace_id,
             branch_name,
+            len(arch_files),
+            arch_dir_rel,
         )
 
         return {
             "branch_name": branch_name,
+            "arch_docs_dir": arch_dir_rel,
+            "written_arch_files": arch_files,
             "current_step": "create_branch",
             "completed_steps": ["create_branch"],
         }

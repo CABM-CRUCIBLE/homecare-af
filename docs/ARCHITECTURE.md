@@ -72,3 +72,24 @@ Every LLM call, prompt iteration, token count, cost, and latency measurement is 
 - **`src/homecare_agent/tools/`**: Deterministic subprocess execution, file I/O, Git, and GitHub interactions.
 - **`src/homecare_agent/graph/`**: LangGraph StateGraph, node implementations, and conditional routing edges.
 - **`src/homecare_agent/ui/`**: Rich CLI and Gradio UI.
+
+### 2.5 Architecture Documentation & Visual Resource Persistence
+All generated architectural blueprints and visual inputs are persisted and version-controlled inside a dedicated feature directory within the repository:
+
+```
+<repo_path>/docs/architecture/<feature-slug>/
+├── STRATEGY.md                       # Comprehensive C4 strategy & diagrams
+├── TACTICAL-PLAN.md                  # Work package wave breakdown & execution plan
+├── MANUAL_TEST_GUIDE.md              # QA test scenarios & validation guide
+├── adrs/                             # Formal MADR architectural decision records
+│   ├── ADR-001-*.md
+│   └── ...
+└── Resources/                        # Archived wireframe screenshots & mockup images
+    ├── mock_dashboard.png
+    └── ...
+```
+
+- **Fault-Tolerant Early Git Commit:** To safeguard design artifacts against unexpected code synthesis failures or timeouts, `save_architecture_documents` is invoked immediately upon feature branch creation (`create_branch`). The entire directory `docs/architecture/<feature-slug>/` is staged and committed to Git before code synthesis commences.
+- **Visual Resource Archival:** Uploaded wireframes and UI screenshots are copied into the `Resources/` folder and checked into Git alongside the technical blueprints.
+- **Sandboxed File Operations:** All file writes and image copies are enforced through `validate_safe_path(target, repo_path)` to ensure strict path-traversal prevention.
+- **QA Testing Guide Integration:** Post-test execution, `generate_manual_test_doc` writes `MANUAL_TEST_GUIDE.md` into the same feature directory, committed during Step 16 (`commit_documentation`).

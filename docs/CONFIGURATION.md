@@ -48,3 +48,25 @@ The framework is configured via environment variables, an `.env` file, or comman
 | `anthropic/claude-sonnet-4` | Architecture, Code Review, Complex Logic | Exceptional reasoning and strict following of constraints. |
 | `openai/gpt-4o` | Wireframe Vision Analysis & Strategy | Fast multimodal understanding and structured JSON. |
 | `deepseek/deepseek-coder` | High-throughput Code Generation | Cost-effective generation for large repetitive files. |
+
+---
+
+## 3. Architecture Documentation Repository Layout
+
+Architecture blueprints, decisions, manual testing guides, and visual mockups are automatically written and committed to Git under the repository root:
+
+```
+<repo_path>/docs/architecture/<feature-slug>/
+├── STRATEGY.md                       # Strategic C4 model & architectural diagrams
+├── TACTICAL-PLAN.md                  # Wave-ordered work packages & technical tasks
+├── MANUAL_TEST_GUIDE.md              # Verification guide & QA test scenarios
+├── adrs/                             # MADR Architectural Decision Records
+│   ├── ADR-001-*.md
+│   └── ...
+└── Resources/                        # Archived wireframe images & UI mockups
+    ├── dashboard_mockup.png
+    └── ...
+```
+
+- **Feature Slug:** Derived automatically from the feature name (e.g. `"Patient Vitals Tracking"` -> `patient-vitals-tracking`).
+- **Timing:** Blueprints and visual assets are committed immediately upon branch checkout (`create_branch`), ensuring design artifacts are never lost even if subsequent code generation encounters compiler errors or timeouts.

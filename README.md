@@ -52,6 +52,7 @@ The **HomeCare Agentic Framework** is an autonomous engineering system powered b
   - **Gradio Authentication:** Configurable HTTP basic authentication for browser interface.
 - **Dual Interface:** Interactive Rich terminal CLI with live progress tracking or browser-based Gradio 5.0 Web UI with live streaming.
 - **Automated Pull Requests & Review:** Opens GitHub PRs, commits code wave-by-wave, and performs automated code reviews with a Senior Architect persona.
+- **Architecture & Visual Resource Archival:** Automatically persists all architectural documents (`STRATEGY.md`, `TACTICAL-PLAN.md`, `adrs/`, `MANUAL_TEST_GUIDE.md`) and wireframes (`Resources/`) into `docs/architecture/<feature-slug>/` and commits them to Git immediately on branch creation.
 
 ---
 
@@ -66,7 +67,7 @@ flowchart TD
     E --> F[6. Architectural Decision Records ADRs]
     F --> G[7. Agentic Prompts & File Ownership]
     G --> H[8. Architecture Review Loop]
-    H -->|Approved| I[9. Feature Branch Creation]
+    H -->|Approved| I[9. Feature Branch & Docs Commit]
     H -->|Revisions Needed| D
     I --> J[10. Wave-based Code Execution & Unit Tests]
     J -->|More Waves| J
@@ -89,10 +90,10 @@ flowchart TD
 | **6** | `generate_adrs` | `nodes/architect.py` | Drafts formal MADR-format architectural records | Step 6 |
 | **7** | `generate_agentic_prompts` | `nodes/generate_prompts.py` | Prompts engineering & file ownership matrix | Step 7 |
 | **8** | `review_architecture` | `nodes/review_arch.py` | Multi-agent review with a 20+ year Senior Architect persona | Step 8 |
-| **9** | `create_branch` | `nodes/git_ops.py` | Checks out and pushes `feature/<feature-name>` | Step 9 |
+| **9** | `create_branch` | `nodes/git_ops.py` | Creates branch & commits `docs/architecture/<slug>/` + visual resources | Step 9 |
 | **10** | `execute_wave` | `nodes/execute_prompt.py` | Synthesizes complete code, writes files, runs unit tests | Step 10 |
 | **11** | `run_e2e_tests` | `nodes/testing.py` | Generates & executes Playwright E2E and k6 load tests | Step 11 |
-| **12** | `generate_manual_test_doc` | `nodes/documentation.py` | QA manual testing guides committed to repo | Step 12 |
+| **12** | `generate_manual_test_doc` | `nodes/documentation.py` | Writes `MANUAL_TEST_GUIDE.md` to feature docs directory | Step 12 |
 | **13** | `create_pr` | `nodes/code_review.py` | Opens GitHub PR and performs automated line-by-line review | Step 13 |
 | **14** | `notify_ready_for_merge` | `nodes/notifications.py` | Posts review comments and notifies team of merge readiness | Step 14 |
 
@@ -269,6 +270,8 @@ GRADIO_SERVER_NAME=127.0.0.1
 GRADIO_SERVER_PORT=7860
 GRADIO_AUTH_USER=admin
 GRADIO_AUTH_PASSWORD=YourSecurePassword123!
+# UI Theme: "crucible" (Executive Glassmorphism), "soft" (Gradio Soft), "default"
+UI_THEME=crucible
 LOG_LEVEL=INFO
 LOG_FILE=logs/homecare-agent.log
 ```
@@ -385,23 +388,25 @@ homecare-agent run --resume <trace_id> --from-step 4
 
 ---
 
-### 4. Gradio Web Interface
+### 4. Gradio Web Interface (Crucible — Executive Glassmorphism)
 
-Launch the interactive web interface:
+Launch the interactive executive workstation interface:
 
 ```bash
+# Launch with default Crucible (Executive Glassmorphism) theme
 homecare-agent web --port 7860
+
+# Or launch with alternative swappable themes (e.g., 'soft' or 'default')
+homecare-agent web --port 7860 --theme soft
 ```
 
 Open your browser to `http://localhost:7860`. If `GRADIO_AUTH_USER` and `GRADIO_AUTH_PASSWORD` are configured, enter your credentials.
 
-**Web UI Tabs:**
-- **Tab 1: Feature Request:** Submit feature name, description, multi-tier models, local LLM toggles, and wireframe uploads.
-- **Tab 2: Clarification:** Review interactive technical clarifications.
-- **Tab 3: Architecture:** Real-time view of `STRATEGY.md`, `TACTICAL-PLAN.md`, ADRs, and Senior Architect review findings.
-- **Tab 4: Execution:** Live stream of LangGraph node completion and wave execution status.
-- **Tab 5: Code Review:** Senior Architect PR review feedback and findings.
-- **Tab 6: 🔄 Resume Pipeline:** Select any saved checkpoint from a dropdown and resume execution with one click!
+**Crucible Executive Workstation Layout:**
+- **Compact Executive Header Strip (~48px):** Clean single-line header with Crucible branding, live system clock in `JetBrains Mono`, and inline telemetry badges (`14 Active Nodes`, `$0.00 Local Code`, `108 Passing Quality Gate`, and Sandboxed Target Workspace).
+- **Inverted Visual Hierarchy (Primary Central Focus):**
+  - **Highlighted Central Workstation (80% Width):** Large, prominent input form with glowing cyan borders, high-contrast labels, expanded requirements textarea, model configurations, and a prominent `Launch Autonomous Pipeline` CTA. Includes 6 core tabs (Feature Request, Clarification, Architecture Studio, Execution Engine with live stream, Code Review, and 1-Click Checkpoint Resumption).
+  - **Compact Telemetry & Mission Dock (20% Width):** Lightweight right-hand intelligence dock with mission directives, resource usage meters (CPU, LLM Gateway, Host RAM), and live activity feed.
 
 ---
 
@@ -440,7 +445,9 @@ docker compose down
 
 ## Automated Testing & Quality Assurance
 
-The framework features a comprehensive test suite containing **101 unit, integration, and security tests** validating architecture guardrails, thread safety, and state persistence.
+## Automated Testing & Quality Assurance
+
+The framework features a comprehensive test suite containing **108 unit, integration, and security tests** validating architecture guardrails, thread safety, state persistence, and UI theming.
 
 ### Run All Tests:
 ```bash
@@ -456,6 +463,7 @@ pytest -v
 
 | Test Target | Command | Purpose |
 |---|---|---|
+| **UI Theming & Crucible** | `pytest tests/test_theme.py -v` | Validates Executive Glassmorphism theme bundle, CSS, and theme switching |
 | **Pipeline Resumption & Checkpoints** | `pytest tests/test_checkpoint_resume.py -v` | Validates Step 4 resumption, atomic writes, and SHA-256 tamper checks |
 | **Local LLM Routing** | `pytest tests/test_local_llm.py -v` | Validates Ollama/vLLM endpoints, caching, and model overrides |
 | **Security & Sandboxing** | `pytest tests/test_security.py -v` | Validates path traversal blocking, secret scanning, and redaction |
@@ -509,9 +517,10 @@ homecare-af/
 │   │       └── notifications.py  # Step 14: Merge notifications & review comments
 │   └── ui/                       # Presentation layers
 │       ├── cli.py                # Rich banners, tables, and progress display
-│       └── web.py                # Gradio 5.0 UI with pipeline streaming & resume tab
+│       ├── theme.py              # Crucible Executive Glassmorphism & Theme Bundle registry
+│       └── web.py                # 3-column workstation with live metrics & streaming
 ├── templates/                    # Enterprise document templates (Strategy, ADR, etc.)
-├── tests/                        # Comprehensive test suite (101 tests)
+├── tests/                        # Comprehensive test suite (108 tests)
 ├── docs/                         # Architectural blueprints & code review records
 │   ├── ARCHITECTURE.md           # System architecture & LangGraph topology
 │   ├── CONFIGURATION.md          # Full configuration and env variable guide

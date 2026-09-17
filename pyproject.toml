@@ -32,7 +32,7 @@ dependencies = [
     # === Configuration ===
     "python-dotenv>=1.0",
     # === File Handling ===
-    "aiopath>=0.6",
+    "anyio>=4.0",
     "pathspec>=0.12",
     # === Templating ===
     "jinja2>=3.1",

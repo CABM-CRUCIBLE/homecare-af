@@ -47,9 +47,13 @@ This document describes the complete 18-step automated engineering workflow orch
 - Scores Clean Architecture, Multi-tenancy, Security, and Error Handling.
 - If rejected, triggers revision loop with actionable feedback.
 
-## 9. Branch Creation (`create_branch`)
-- Derives branch name `feature/<kebab-name>`.
-- Creates and pushes branch to remote repository.
+## 9. Branch Creation & Architecture Persistence (`create_branch`)
+- Derives sanitized feature branch name `feature/<kebab-name>`.
+- Creates and checks out feature branch.
+- **Early Architecture Persistence:** Writes `STRATEGY.md`, `TACTICAL-PLAN.md`, and `adrs/ADR-*.md` into `docs/architecture/<feature-slug>/`.
+- **Visual Resource Archival:** Copies uploaded wireframe images and screenshots into `docs/architecture/<feature-slug>/Resources/`.
+- Stages and commits all architecture documentation and visual resources to the feature branch immediately (`docs(architecture): add strategy, tactical plan, ADRs, and visual resources for <feature_name>`).
+- Pushes commit to remote repository, ensuring architectural assets are safely preserved prior to code synthesis.
 
 ## 10. Wave-Based Code Generation (`execute_wave`)
 - For each Work Package in the current wave:
@@ -76,10 +80,11 @@ This document describes the complete 18-step automated engineering workflow orch
 - Produces k6 load testing scripts with p95 response time and error rate thresholds.
 
 ## 15. Manual Testing Guide Generation (`generate_manual_test_doc`)
-- Produces step-by-step instructions for developers and QA engineers.
+- Produces step-by-step verification instructions for developers and QA engineers.
+- Persists `MANUAL_TEST_GUIDE.md` into `docs/architecture/<feature-slug>/MANUAL_TEST_GUIDE.md`.
 
 ## 16. Documentation Commit (`commit_documentation`)
-- Commits all generated architectural documentation, test specs, and guides.
+- Commits `docs/architecture/<feature-slug>/MANUAL_TEST_GUIDE.md` along with any generated E2E/load test scripts.
 
 ## 17. Pull Request Creation (`create_pull_request`)
 - Opens GitHub PR against main branch.

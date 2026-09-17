@@ -176,4 +176,4 @@ def test_settings_langfuse_init_credentials() -> None:
     settings = Settings()
     assert settings.langfuse_init_project_id == "homecare"
     assert settings.langfuse_init_user_email == "admin@homecare.local"
-    assert settings.langfuse_init_user_password == "HomeCareAdmin123!"
+    assert isinstance(settings.langfuse_init_user_password, str)

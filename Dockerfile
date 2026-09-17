@@ -1,6 +1,6 @@
 FROM python:3.11-slim
 
-# Install system dependencies (git, curl)
+# Install system dependencies (git, curl, build tools)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     curl \
@@ -9,16 +9,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-# Copy dependency definition
-COPY pyproject.toml .
+# Copy dependency definition and README required by hatchling metadata validation
+COPY pyproject.toml README.md ./
 
-# Install dependencies
-RUN pip install --no-cache-dir -e .
-
-# Copy source code and templates
+# Copy source code, templates, and docs
 COPY src/ src/
 COPY templates/ templates/
 COPY docs/ docs/
+
+# Install framework and dependencies
+RUN pip install --no-cache-dir -e .
 
 # Set environment defaults
 ENV PYTHONUNBUFFERED=1
@@ -29,4 +29,4 @@ ENV GRADIO_SERVER_PORT=7860
 EXPOSE 7860
 
 # Default entrypoint: launch Gradio Web UI
-CMD ["homecare-agent", "web", "--host", "0.0.0.0", "--port", "7860"]
+CMD ["homecare-agent", "web", "--port", "7860"]
