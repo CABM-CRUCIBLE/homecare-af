@@ -15,6 +15,7 @@ services:
       - MODEL_REVIEW=${MODEL_REVIEW:-anthropic/claude-sonnet-4}
       - GITHUB_TOKEN=${GITHUB_TOKEN:-}
       - REPO_PATH=/workspace
+      - REPO_URL=${REPO_URL:-}
       - LANGFUSE_ENABLED=${LANGFUSE_ENABLED:-true}
       - LANGFUSE_PUBLIC_KEY=${LANGFUSE_PUBLIC_KEY:-pk-lf-homecare-local}
       - LANGFUSE_SECRET_KEY=${LANGFUSE_SECRET_KEY:-sk-lf-homecare-local}
@@ -24,7 +25,7 @@ services:
       - GRADIO_SERVER_NAME=0.0.0.0
     volumes:
       # Mount target repository into container workspace
-      - ${HOST_REPO_PATH:-.}:/workspace
+      - ${REPO_PATH:-${HOST_REPO_PATH:-.}}:/workspace
     depends_on:
       - langfuse-server
     restart: unless-stopped
