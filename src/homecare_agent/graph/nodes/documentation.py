@@ -138,6 +138,49 @@ def save_architecture_documents(state: AgentState, settings: Settings) -> list[s
         except Exception as err:
             logger.error("[save_architecture_documents][trace_id=%s] Failed to archive screenshots: %s", trace_id, err)
 
+    # 4b. Wireframe URLs inside Resources/
+    wireframe_urls = state.get("wireframe_urls", [])
+    if wireframe_urls:
+        try:
+            safe_res_dir = validate_safe_path(resources_dir, repo_path)
+            safe_res_dir.mkdir(parents=True, exist_ok=True)
+            links_file = resources_dir / "WIREFRAMES.md"
+            safe_links = validate_safe_path(links_file, repo_path)
+            lines = ["# Wireframe & UI Mockup References\n\n"]
+            import httpx
+            for idx, url in enumerate(wireframe_urls, start=1):
+                lines.append(f"{idx}. [{url}]({url})\n")
+                try:
+                    with httpx.Client(timeout=5.0, follow_redirects=True) as client:
+                        resp = client.get(url)
+                        if resp.status_code == 200:
+                            ctype = resp.headers.get("content-type", "")
+                            ext = ".jpg" if ("jpeg" in ctype or "jpg" in ctype) else (".webp" if "webp" in ctype else ".png")
+                            url_img_path = resources_dir / f"wireframe_url_{idx}{ext}"
+                            safe_url_img = validate_safe_path(url_img_path, repo_path)
+                            safe_url_img.write_bytes(resp.content)
+                            written_files.append(str(url_img_path.relative_to(repo_path)).replace("\\", "/"))
+                except Exception as dl_err:
+                    logger.debug("Could not pre-download wireframe URL %s: %s", url, dl_err)
+            safe_links.write_text("".join(lines), encoding="utf-8")
+            written_files.append(str(links_file.relative_to(repo_path)).replace("\\", "/"))
+            logger.info("[save_architecture_documents][trace_id=%s] Recorded %d wireframe URL(s) in Resources/WIREFRAMES.md", trace_id, len(wireframe_urls))
+        except Exception as err:
+            logger.error("[save_architecture_documents][trace_id=%s] Failed to archive wireframe URLs: %s", trace_id, err)
+
+    # 5. Architecture Review Document
+    review_doc = state.get("architecture_review", "")
+    if review_doc:
+        try:
+            rev_path = target_dir / "ARCHITECTURE_REVIEW.md"
+            safe_rev = validate_safe_path(rev_path, repo_path)
+            safe_rev.parent.mkdir(parents=True, exist_ok=True)
+            safe_rev.write_text(review_doc, encoding="utf-8")
+            written_files.append(str(rev_path.relative_to(repo_path)).replace("\\", "/"))
+            logger.info("[save_architecture_documents][trace_id=%s] Persisted ARCHITECTURE_REVIEW.md (%d bytes)", trace_id, len(review_doc))
+        except Exception as err:
+            logger.error("[save_architecture_documents][trace_id=%s] Failed to write ARCHITECTURE_REVIEW.md: %s", trace_id, err)
+
     logger.info(
         "[COMPLETED:save_architecture_documents][trace_id=%s] Successfully persisted %d architecture file(s) under %s",
         trace_id,

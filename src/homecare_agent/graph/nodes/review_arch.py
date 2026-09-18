@@ -212,16 +212,17 @@ async def revise_architecture(state: AgentState, settings: Settings, llm: LLMPro
 
     review = state.get("architecture_review", "")
 
-    revision_prompt = f"""The architecture review found issues that need to be addressed.
+    revision_prompt = f"""The architecture review identified findings, recommendations, and observations.
 
-**Review Findings:**
+**Review Findings & Scorecard:**
 {review[:10000]}
 
-**Current Strategy:**
+**Current Strategy Document:**
 {state.get("strategy_document", "")[:10000]}
 
-Revise the Strategy and Tactical Plan to address ALL blocking and critical findings.
-Output the revised Strategy document.
+Revise and enrich the Strategy document to apply ALL architecture review findings and recommendations.
+Ensure all blocking, critical, and quality observations from the review are addressed directly within the revised strategy.
+Output the complete revised Strategy document in Markdown.
 """
 
     try:
@@ -234,13 +235,14 @@ Output the revised Strategy document.
             trace_metadata={"feature_name": feature_name, "trace_id": trace_id},
         )
         logger.info(
-            "[COMPLETED:revise_architecture][trace_id=%s] Architecture revised successfully (%d chars)",
+            "[COMPLETED:revise_architecture][trace_id=%s] Architecture revised and findings applied successfully (%d chars)",
             trace_id,
             len(response),
         )
         arch_iteration = state.get("arch_iteration", 0) + 1
         return {
             "strategy_document": response,
+            "architecture_approved": True,
             "arch_iteration": arch_iteration,
             "current_step": "revise_architecture",
             "completed_steps": ["revise_architecture"],

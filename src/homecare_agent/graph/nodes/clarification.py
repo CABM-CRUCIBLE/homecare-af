@@ -43,31 +43,44 @@ async def ask_clarifications(state: AgentState, settings: Settings, llm: LLMProv
         feature_name,
     )
 
-    console = Console()
     answers: list[dict[str, Any]] = []
 
     try:
-        console.print("\n[bold yellow]📋 Clarification Questions[/bold yellow]\n")
+        from homecare_agent.ui.clarification_manager import ClarificationManager
+        mgr = ClarificationManager.get_instance()
 
-        for q in questions:
-            if q.get("answer"):
-                continue  # Already answered
-            console.print(f"[bold]{q.get('id', '?')}[/bold] ({q.get('category', 'general')})")
-            console.print(f"  {q.get('question', '')}")
-            if q.get("context"):
-                console.print(f"  [dim]{q['context']}[/dim]")
+        if mgr.has_session(trace_id):
+            logger.info("[ask_clarifications][trace_id=%s] Waiting for user input via Clarification Web UI...", trace_id)
+            mgr.request_clarification(trace_id, questions)
+            user_response = await mgr.wait_for_answer(trace_id)
+            if user_response:
+                answers.append({
+                    "id": "web_response",
+                    "question": "; ".join(q.get("question", "") for q in questions),
+                    "answer": user_response,
+                })
+        else:
+            console.print("\n[bold yellow]📋 Clarification Questions[/bold yellow]\n")
 
-            options = q.get("options", [])
-            if options:
-                for i, opt in enumerate(options, 1):
-                    console.print(f"    {i}. {opt}")
+            for q in questions:
+                if q.get("answer"):
+                    continue  # Already answered
+                console.print(f"[bold]{q.get('id', '?')}[/bold] ({q.get('category', 'general')})")
+                console.print(f"  {q.get('question', '')}")
+                if q.get("context"):
+                    console.print(f"  [dim]{q['context']}[/dim]")
 
-            answer = Prompt.ask("  Your answer")
-            answers.append({
-                "id": q.get("id", ""),
-                "question": q.get("question", ""),
-                "answer": answer,
-            })
+                options = q.get("options", [])
+                if options:
+                    for i, opt in enumerate(options, 1):
+                        console.print(f"    {i}. {opt}")
+
+                answer = Prompt.ask("  Your answer")
+                answers.append({
+                    "id": q.get("id", ""),
+                    "question": q.get("question", ""),
+                    "answer": answer,
+                })
 
         logger.info(
             "[COMPLETED:ask_clarifications][trace_id=%s] Collected %d answer(s)",

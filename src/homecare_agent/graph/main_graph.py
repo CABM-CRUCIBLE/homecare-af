@@ -136,9 +136,9 @@ def build_graph(settings: Settings, llm: LLMProvider) -> StateGraph:
     graph.add_edge("generate_adrs", "generate_agentic_prompts")
     graph.add_conditional_edges("generate_agentic_prompts", partial(check_prompts_output, settings=settings))
 
-    # Architecture review loop
+    # Architecture review: single-pass with findings applied to documentation
     graph.add_conditional_edges("review_architecture", partial(arch_approved, settings=settings))
-    graph.add_edge("revise_architecture", "review_architecture")
+    graph.add_edge("revise_architecture", "create_branch")
 
     # Execution pipeline
     graph.add_edge("create_branch", "execute_wave")

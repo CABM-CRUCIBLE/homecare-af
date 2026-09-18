@@ -646,11 +646,38 @@ class LLMProvider:
         # Build multimodal content
         content: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
         for url_or_path in image_urls:
-            if url_or_path.startswith(("http://", "https://", "data:")):
+            if url_or_path.startswith("data:"):
                 content.append({
                     "type": "image_url",
                     "image_url": {"url": url_or_path},
                 })
+            elif url_or_path.startswith(("http://", "https://")):
+                # Pre-fetch image URL to base64 data URI to guarantee delivery across all vision providers
+                try:
+                    import httpx
+                    async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
+                        resp = await client.get(url_or_path)
+                        if resp.status_code == 200:
+                            b64_data = base64.b64encode(resp.content).decode()
+                            raw_ctype = resp.headers.get("content-type", "image/png").split(";")[0].strip()
+                            ctype = raw_ctype if raw_ctype.startswith("image/") else "image/png"
+                            content.append({
+                                "type": "image_url",
+                                "image_url": {"url": f"data:{ctype};base64,{b64_data}"},
+                            })
+                            logger.info("Successfully pre-fetched image URL %s (%d bytes)", url_or_path, len(resp.content))
+                        else:
+                            logger.warning("Image URL %s returned status %d; passing raw URL", url_or_path, resp.status_code)
+                            content.append({
+                                "type": "image_url",
+                                "image_url": {"url": url_or_path},
+                            })
+                except Exception as fetch_err:
+                    logger.warning("Could not pre-fetch image URL %s (%s); passing direct URL", url_or_path, fetch_err)
+                    content.append({
+                        "type": "image_url",
+                        "image_url": {"url": url_or_path},
+                    })
             else:
                 path = Path(url_or_path)
                 if path.exists():

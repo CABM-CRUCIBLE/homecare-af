@@ -40,6 +40,14 @@ def needs_clarification(
                 clarification_iteration,
                 max_clarifications,
             )
+            is_cost_saver = (
+                state.get("stop_after_clarification")
+                or (settings.cost_saver_mode if settings else False)
+                or state.get("stop_after_step") in ("intake_feature", "ask_clarifications", "1", "2")
+            )
+            if is_cost_saver:
+                logger.info("[ROUTE:needs_clarification][trace_id=%s] Decision -> END (cost-saver stop_after_clarification active)", trace_id)
+                return "__end__"  # type: ignore[return-value]
             return "analyze_codebase"
         logger.info(
             "[ROUTE:needs_clarification][trace_id=%s] Decision -> 'ask_clarifications' (clarifications pending, iter %d/%d)",
@@ -48,6 +56,17 @@ def needs_clarification(
             max_clarifications,
         )
         return "ask_clarifications"
+
+    # Clarifications complete
+    is_cost_saver = (
+        state.get("stop_after_clarification")
+        or (settings.cost_saver_mode if settings else False)
+        or state.get("stop_after_step") in ("intake_feature", "ask_clarifications", "1", "2")
+    )
+    if is_cost_saver:
+        logger.info("[ROUTE:needs_clarification][trace_id=%s] Decision -> END (cost-saver stop_after_clarification active)", trace_id)
+        return "__end__"  # type: ignore[return-value]
+
     logger.info(
         "[ROUTE:needs_clarification][trace_id=%s] Decision -> 'analyze_codebase' (clarifications complete)",
         trace_id,
@@ -59,13 +78,14 @@ def arch_approved(
     state: AgentState,
     settings: Settings | None = None,
 ) -> Literal["create_branch", "revise_architecture"]:
-    """Route based on architecture review approval.
+    """Route based on architecture review approval (ARCH-03 single-pass review).
 
     Returns:
-        Next node name: create_branch if approved, revise_architecture if not.
+        Next node name: create_branch if approved or review already completed once,
+        revise_architecture if findings need to be applied.
     """
     trace_id = state.get("trace_id", "no-trace")
-    max_arch = settings.max_arch_iterations if settings else 3
+    max_arch = settings.max_arch_iterations if settings else 1
     arch_iteration = state.get("arch_iteration", 0)
 
     if state.get("architecture_approved", False):
@@ -76,8 +96,8 @@ def arch_approved(
         return "create_branch"
 
     if arch_iteration >= max_arch:
-        logger.warning(
-            "[ROUTE:arch_approved][trace_id=%s] Decision -> 'create_branch' (architecture review loop limit %d/%d reached, forcing proceed to avoid runaway spend)",
+        logger.info(
+            "[ROUTE:arch_approved][trace_id=%s] Decision -> 'create_branch' (architecture review single-pass complete, iter %d/%d)",
             trace_id,
             arch_iteration,
             max_arch,
@@ -85,10 +105,8 @@ def arch_approved(
         return "create_branch"
 
     logger.info(
-        "[ROUTE:arch_approved][trace_id=%s] Decision -> 'revise_architecture' (architecture requires revision, iter %d/%d)",
+        "[ROUTE:arch_approved][trace_id=%s] Decision -> 'revise_architecture' (applying architecture review findings to documentation)",
         trace_id,
-        arch_iteration,
-        max_arch,
     )
     return "revise_architecture"
 

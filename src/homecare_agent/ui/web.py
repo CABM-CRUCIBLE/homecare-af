@@ -28,6 +28,30 @@ from homecare_agent.ui.theme import (
 logger = logging.getLogger(__name__)
 
 
+def _extract_file_paths(files: Any) -> list[str]:
+    """Safely extract valid local file paths from Gradio File / FileData components."""
+    if not files:
+        return []
+    paths: list[str] = []
+    file_list = files if isinstance(files, list) else [files]
+    for f in file_list:
+        p: str | None = None
+        if isinstance(f, str):
+            p = f
+        elif hasattr(f, "path") and f.path:
+            p = str(f.path)
+        elif hasattr(f, "name") and f.name:
+            p = str(f.name)
+        elif isinstance(f, dict) and f.get("path"):
+            p = str(f["path"])
+
+        if p and Path(p).exists():
+            paths.append(p)
+        elif p:
+            logger.warning("[_extract_file_paths] Uploaded file path does not exist: %s", p)
+    return paths
+
+
 def _generate_crucible_header_html(settings: Any) -> str:
     """Generate compact Crucible executive header strip with inline telemetry badges."""
     now = datetime.datetime.now()
@@ -165,9 +189,9 @@ def create_web_ui(settings: Any) -> gr.Blocks:
         with gr.Row():
             # Left: Primary Workstation (80% width — large, prominent & highlighted)
             with gr.Column(scale=4):
-                with gr.Tabs(elem_classes=["crucible-main-tabs"]):
+                with gr.Tabs(elem_classes=["crucible-main-tabs"]) as main_tabs:
                     # Tab 1: Feature Request
-                    with gr.Tab("📋 Feature Request"):
+                    with gr.Tab("📋 Feature Request", id="tab_feature"):
                         gr.HTML(
                             '<div style="margin-bottom: 14px; padding-bottom: 10px; border-bottom: 1px solid rgba(148, 163, 184, 0.2);">'
                             '  <div style="font-size: 1.15rem; font-weight: 800; color: #ffffff; letter-spacing: -0.01em;">'
@@ -259,6 +283,12 @@ def create_web_ui(settings: Any) -> gr.Blocks:
                                         placeholder="https://example.com/mockup.png",
                                     )
 
+                        cost_saver_mode = gr.Checkbox(
+                            label="🛡️ Cost-Saver Test Mode: Stop after Intake & Clarification",
+                            value=getattr(settings, "cost_saver_mode", False),
+                            info="Halts immediately after requirements extraction and clarification Q&A — avoids token charges for architecture and code generation.",
+                        )
+
                         submit_btn = gr.Button(
                             "🚀 Launch Autonomous Pipeline",
                             variant="primary",
@@ -272,7 +302,7 @@ def create_web_ui(settings: Any) -> gr.Blocks:
                         )
 
                     # Tab 2: Clarification Q&A
-                    with gr.Tab("❓ Clarification"):
+                    with gr.Tab("❓ Clarification", id="tab_clarification"):
                         chatbot = gr.Chatbot(
                             label="Clarification Inquiries",
                             height=460,
@@ -283,8 +313,33 @@ def create_web_ui(settings: Any) -> gr.Blocks:
                         )
                         answer_btn = gr.Button("Submit Answer", variant="primary")
 
+                        def submit_clarification_answer(answer_text: str, current_history: list[dict[str, Any]] | None):
+                            if not answer_text or not answer_text.strip():
+                                return current_history or [], ""
+                            clean_ans = answer_text.strip()
+                            history = list(current_history or [])
+                            history.append({"role": "user", "content": clean_ans})
+                            history.append({
+                                "role": "assistant",
+                                "content": "✅ **Clarification submitted!** Resuming autonomous pipeline...",
+                            })
+                            from homecare_agent.ui.clarification_manager import ClarificationManager
+                            ClarificationManager.get_instance().submit_answer(clean_ans)
+                            return history, ""
+
+                        answer_btn.click(
+                            fn=submit_clarification_answer,
+                            inputs=[answer_input, chatbot],
+                            outputs=[chatbot, answer_input],
+                        )
+                        answer_input.submit(
+                            fn=submit_clarification_answer,
+                            inputs=[answer_input, chatbot],
+                            outputs=[chatbot, answer_input],
+                        )
+
                     # Tab 3: Architecture Documents
-                    with gr.Tab("📐 Architecture"):
+                    with gr.Tab("📐 Architecture", id="tab_architecture"):
                         gr.Markdown("<p style='font-size:0.85rem;color:var(--body-text-color-subdued);margin-bottom:8px;'>📁 Architecture blueprints and visual resources are automatically persisted and checked in to <code>docs/architecture/&lt;feature-slug&gt;/</code> on branch creation.</p>")
                         with gr.Tabs():
                             with gr.Tab("Strategy (C4)"):
@@ -299,7 +354,7 @@ def create_web_ui(settings: Any) -> gr.Blocks:
                                 review_output = gr.Markdown("_Senior Architect review findings will render here_")
 
                     # Tab 4: Execution Engine
-                    with gr.Tab("⚡ Execution"):
+                    with gr.Tab("⚡ Execution", id="tab_execution"):
                         execution_log = gr.Markdown("### Live Execution Log\n_Autonomous pipeline idle_")
                         progress_bar = gr.Slider(
                             label="Wave Progress",
@@ -310,11 +365,11 @@ def create_web_ui(settings: Any) -> gr.Blocks:
                         )
 
                     # Tab 5: Code Review
-                    with gr.Tab("🔍 Code Review"):
+                    with gr.Tab("🔍 Code Review", id="tab_code_review"):
                         code_review_output = gr.Markdown("_Senior Architect GitHub PR automated review findings will render here_")
 
                     # Tab 6: Resume Pipeline
-                    with gr.Tab("🔄 Resume Pipeline"):
+                    with gr.Tab("🔄 Resume Pipeline", id="tab_resume"):
                         gr.Markdown(
                             "### 🔄 Resume Pipeline from Checkpoint\n"
                             "Select any saved checkpoint and resume execution directly from Step 4 (or any selected step) without re-running earlier phases."
@@ -393,15 +448,21 @@ def create_web_ui(settings: Any) -> gr.Blocks:
             use_local: bool,
             local_url: str,
             local_model_name: str,
+            cost_saver: bool = False,
         ):
             """Start the agentic pipeline with live step progress streaming."""
             if not name or not desc:
-                yield "### ⚠️ Error\nPlease provide both a feature name and description."
+                yield (
+                    "### ⚠️ Error\nPlease provide both a feature name and description.",
+                    gr.Tabs(selected="tab_feature"),
+                    [],
+                )
                 return
 
             import uuid
             from homecare_agent.llm.provider import LLMProvider
             from homecare_agent.graph.main_graph import compile_graph
+            from homecare_agent.ui.clarification_manager import ClarificationManager
 
             trace_id = uuid.uuid4().hex
             trace_link = ""
@@ -412,11 +473,28 @@ def create_web_ui(settings: Any) -> gr.Blocks:
 
             code_engine = f"Local LLM (`{local_model_name}` at `{local_url}`)" if use_local else f"OpenRouter (`{getattr(settings, 'model_code', '') or 'deepseek/deepseek-coder'}`)"
 
+            wireframe_paths = _extract_file_paths(files)
+            wireframe_urls = [
+                u.strip()
+                for u in (urls or "").replace(",", "\n").split("\n")
+                if u.strip() and u.strip().startswith(("http://", "https://", "data:"))
+            ]
+
+            wf_parts = []
+            if wireframe_paths:
+                wf_parts.append(f"{len(wireframe_paths)} screenshot file(s)")
+            if wireframe_urls:
+                wf_parts.append(f"{len(wireframe_urls)} image URL(s)")
+            wf_info = f"\n**Attached Wireframes:** {', '.join(wf_parts)} queued for vision analysis" if wf_parts else ""
+            mode_badge = "\n🛡️ **Mode:** Cost-Saver Test Mode (Stops after Clarifications)" if cost_saver else ""
+
             yield (
                 f"### 🚀 Starting Pipeline for: **{name}**\n"
                 f"**Code Engine:** {code_engine}\n"
-                f"**Trace ID:** `{trace_id}`{trace_link}\n\n"
-                f"⏳ Initializing LangGraph execution..."
+                f"**Trace ID:** `{trace_id}`{trace_link}{wf_info}{mode_badge}\n\n"
+                f"⏳ Initializing LangGraph execution...",
+                gr.Tabs(selected="tab_feature"),
+                [],
             )
 
             # Build initial state
@@ -426,12 +504,16 @@ def create_web_ui(settings: Any) -> gr.Blocks:
                 "feature_description": desc,
                 "repo_path": settings.repo_path,
                 "repo_url": settings.repo_url,
-                "wireframe_paths": [f.name for f in files] if files else [],
-                "wireframe_urls": [u.strip() for u in urls.split("\n") if u.strip()],
-                "clarification_complete": True,  # Non-interactive in web
+                "wireframe_paths": wireframe_paths,
+                "wireframe_urls": wireframe_urls,
+                "stop_after_clarification": cost_saver,
+                "clarification_complete": False,
                 "current_wave": 0,
                 "review_iteration": 0,
             }
+
+            clarification_mgr = ClarificationManager.get_instance()
+            clarification_mgr.register_session(trace_id)
 
             try:
                 llm = LLMProvider(settings)
@@ -439,8 +521,16 @@ def create_web_ui(settings: Any) -> gr.Blocks:
                 graph = compile_graph(settings, llm)
 
                 progress_log = [f"**Trace ID:** `{trace_id}`{trace_link}\n"]
+                if wireframe_paths or wireframe_urls:
+                    progress_log.append(
+                        f"• 🖼️ **Wireframes attached:** {len(wireframe_paths)} file(s), {len(wireframe_urls)} URL(s) queued for vision analysis"
+                    )
+
                 halted = False
                 all_errors: list[Any] = []
+                current_tab = "tab_feature"
+                chat_history: list[dict[str, Any]] = []
+
                 async for event in graph.astream(init_state):
                     for node_name, state_update in event.items():
                         step = state_update.get("current_step", node_name)
@@ -448,7 +538,35 @@ def create_web_ui(settings: Any) -> gr.Blocks:
                         if step_errors:
                             all_errors.extend(step_errors)
 
-                        if node_name == "error_halt" or step == "error_halt":
+                        if node_name == "intake_feature" or step == "intake_feature":
+                            questions = state_update.get("clarification_questions", [])
+                            is_complete = state_update.get("clarification_complete", True)
+                            if questions and not is_complete:
+                                current_tab = "tab_clarification"
+                                q_text = f"### 📋 Clarification Required: **{name}**\n\n"
+                                q_text += "The agent analyzed the feature description and codebase, and needs clarification on the following items:\n\n"
+                                for idx, q in enumerate(questions, 1):
+                                    cat = q.get("category", "Requirements")
+                                    q_text += f"**{idx}. [{cat}]** {q.get('question', '')}\n"
+                                    if q.get("context"):
+                                        q_text += f"   > _{q['context']}_\n"
+                                q_text += "\n*Type your answer below and click **Submit Answer** to proceed.*"
+                                chat_history = [{"role": "assistant", "content": q_text}]
+                                progress_log.append("• ❓ **Clarification required:** Navigating to Clarification tab — awaiting user response...")
+                                yield (
+                                    "### ⚙️ Pipeline Paused for Clarification...\n" + "\n".join(progress_log),
+                                    gr.Tabs(selected="tab_clarification"),
+                                    chat_history,
+                                )
+                                continue
+                            else:
+                                progress_log.append("• ✅ **Step completed:** `intake_feature`")
+
+                        elif node_name == "ask_clarifications" or step == "ask_clarifications":
+                            current_tab = "tab_feature"
+                            progress_log.append("• ✅ **Step completed:** `ask_clarifications` (User input integrated)")
+
+                        elif node_name == "error_halt" or step == "error_halt":
                             halted = True
                             progress_log.append(f"• 🛑 **Pipeline Halted:** Critical step failed")
                             if all_errors:
@@ -471,22 +589,51 @@ def create_web_ui(settings: Any) -> gr.Blocks:
                             doc_files = state_update.get("written_doc_files", [])
                             if doc_files:
                                 progress_log.append(f"  📝 *QA Testing Guide committed:* `{doc_files[0]}`")
-                        yield "### ⚙️ Pipeline Running...\n" + "\n".join(progress_log)
+
+                        yield (
+                            "### ⚙️ Pipeline Running...\n" + "\n".join(progress_log),
+                            gr.Tabs(selected=current_tab),
+                            chat_history,
+                        )
 
                 llm.flush()
 
                 if halted:
-                    yield f"### 🛑 Pipeline Halted (Circuit Breaker Tripped)\n\n" + "\n".join(progress_log)
+                    yield (
+                        f"### 🛑 Pipeline Halted (Circuit Breaker Tripped)\n\n" + "\n".join(progress_log),
+                        gr.Tabs(selected=current_tab),
+                        chat_history,
+                    )
+                elif cost_saver:
+                    yield (
+                        f"### 🛡️ Intake & Clarifications Completed (Cost-Saver Mode)\n\n"
+                        + "\n".join(progress_log)
+                        + f"\n\n---\n"
+                        + f"💰 **Zero Downstream Architecture or Code Generation Costs Incurred.**\n\n"
+                        + f"- Requirements, wireframes, and user clarification answers have been analyzed and finalized.\n"
+                        + f"- Trace checkpoint saved: `{trace_id}`.\n"
+                        + f"- *Ready to build?* Whenever you wish to proceed to architecture, code generation, and PR synthesis, open the **Resume Pipeline** tab and resume from Step 3 (`analyze_codebase`)!",
+                        gr.Tabs(selected="tab_feature"),
+                        chat_history,
+                    )
                 else:
-                    yield f"### 🎉 Pipeline Finished for **{name}**\n\n" + "\n".join(progress_log)
+                    yield (
+                        f"### 🎉 Pipeline Finished for **{name}**\n\n" + "\n".join(progress_log),
+                        gr.Tabs(selected="tab_architecture"),
+                        chat_history,
+                    )
             except Exception as err:
                 yield (
                     f"### ⚠️ Execution Note\n"
                     f"Pipeline session initialized with Trace ID: `{trace_id}`{trace_link}\n\n"
                     f"**Status / Diagnostic:** {err}\n\n"
                     f"> **CLI Automation:** For full interactive terminal prompts, git staging, and live streaming, run:\n"
-                    f"> `homecare-agent run --name \"{name}\"`"
+                    f"> `homecare-agent run --name \"{name}\"`",
+                    gr.Tabs(selected="tab_feature"),
+                    [],
                 )
+            finally:
+                clarification_mgr.clear_session(trace_id)
 
         submit_btn.click(
             fn=start_pipeline,
@@ -498,8 +645,9 @@ def create_web_ui(settings: Any) -> gr.Blocks:
                 local_llm_toggle,
                 local_llm_url,
                 local_llm_model,
+                cost_saver_mode,
             ],
-            outputs=[status_output],
+            outputs=[status_output, main_tabs, chatbot],
         )
 
         async def resume_pipeline_action(selected_trace: str, chosen_step_label: str) -> str:

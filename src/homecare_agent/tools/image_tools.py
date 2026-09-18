@@ -13,42 +13,59 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 
-def get_image_metadata(image_path: str | Path) -> dict[str, Any]:
-    """Extract basic dimensions and format using PIL."""
-    from PIL import Image
-
+def _fetch_image_bytes(image_path: str | Path) -> tuple[bytes, str]:
+    """Fetch bytes and content type from local file or remote URL."""
+    str_path = str(image_path).strip()
+    if str_path.startswith("data:"):
+        header, b64_part = str_path.split(",", 1)
+        mime = header.split(";")[0].replace("data:", "") or "image/png"
+        return base64.b64decode(b64_part), mime
+    if str_path.startswith(("http://", "https://")):
+        import httpx
+        with httpx.Client(timeout=10.0, follow_redirects=True) as client:
+            resp = client.get(str_path)
+            resp.raise_for_status()
+            ctype = resp.headers.get("content-type", "image/png").split(";")[0].strip()
+            return resp.content, (ctype if ctype.startswith("image/") else "image/png")
     path = Path(image_path)
     if not path.exists():
         raise FileNotFoundError(f"Image not found: {path}")
+    ext = path.suffix.lower().lstrip(".")
+    mime = "image/jpeg" if ext in ("jpg", "jpeg") else f"image/{ext}"
+    return path.read_bytes(), mime
 
-    with Image.open(path) as img:
+
+def get_image_metadata(image_path: str | Path) -> dict[str, Any]:
+    """Extract basic dimensions and format using PIL (supports local files and URLs)."""
+    import io
+    from PIL import Image
+
+    img_bytes, mime = _fetch_image_bytes(image_path)
+    with Image.open(io.BytesIO(img_bytes)) as img:
         return {
-            "path": str(path),
-            "format": img.format,
+            "path": str(image_path),
+            "format": img.format or mime.split("/")[-1].upper(),
             "mode": img.mode,
             "width": img.width,
             "height": img.height,
-            "size_bytes": path.stat().st_size,
+            "size_bytes": len(img_bytes),
         }
 
 
 def encode_image_to_base64(image_path: str | Path) -> str:
-    """Encode an image file to a base64 data string."""
-    path = Path(image_path)
-    if not path.exists():
-        raise FileNotFoundError(f"Image not found: {path}")
-
-    with open(path, "rb") as f:
-        return base64.b64encode(f.read()).decode("utf-8")
+    """Encode an image file or remote URL to a base64 data string."""
+    img_bytes, _ = _fetch_image_bytes(image_path)
+    return base64.b64encode(img_bytes).decode("utf-8")
 
 
 def get_image_data_uri(image_path: str | Path) -> str:
     """Get a data URI string (e.g. data:image/png;base64,...) for LLM vision input."""
-    path = Path(image_path)
-    ext = path.suffix.lower().lstrip(".")
-    mime_type = "image/jpeg" if ext in ("jpg", "jpeg") else f"image/{ext}"
-    b64 = encode_image_to_base64(path)
-    return f"data:{mime_type};base64,{b64}"
+    str_path = str(image_path).strip()
+    if str_path.startswith("data:"):
+        return str_path
+    img_bytes, mime = _fetch_image_bytes(image_path)
+    b64 = base64.b64encode(img_bytes).decode("utf-8")
+    return f"data:{mime};base64,{b64}"
 
 
 async def analyze_wireframe(

@@ -82,6 +82,7 @@ def run(
     local_llm_model: str = typer.Option("", "--local-llm-model", help="Model name on local LLM server (e.g. qwen2.5-coder:32b)"),
     resume: str = typer.Option("", "--resume", help="Resume from checkpoint (trace ID, or 'latest')"),
     from_step: str = typer.Option("", "--from-step", "-s", help="Step number (1-14) or name (e.g. 4 or generate_strategy) to resume from"),
+    intake_only: bool | None = typer.Option(None, "--intake-only", help="Stop immediately after intake and clarification Q&A to save LLM tokens (defaults to COST_SAVER_MODE)"),
 ) -> None:
     """Run the full agentic pipeline from feature request to PR, or resume an existing run."""
     if resume:
@@ -171,6 +172,7 @@ def run(
         "model_architecture": settings.model_architecture,
         "model_code": settings.model_code,
         "model_review": settings.model_review,
+        "stop_after_clarification": settings.cost_saver_mode if intake_only is None else intake_only,
         "current_wave": 0,
         "review_iteration": 0,
     }

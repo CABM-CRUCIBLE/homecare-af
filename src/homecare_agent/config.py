@@ -221,6 +221,10 @@ class Settings(BaseSettings):
         default=60,
         description="Global safety budget ceiling for total LLM calls per workflow run.",
     )
+    cost_saver_mode: bool = Field(
+        default=False,
+        description="Cost-saver test mode: stops immediately after feature intake and clarification Q&A without running expensive downstream architecture or coding nodes.",
+    )
 
     # ─── UI ──────────────────────────────────────────────────────────────
     clarification_mode: ClarificationMode = Field(
